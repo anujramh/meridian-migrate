@@ -2,20 +2,79 @@
 
 > Zero-downtime cross-cloud data migration engine — free forever.
 
-Migrating data across clouds is painful, manual, and risky. Meridian automates the hardest parts — resource discovery, schema translation, live replication, and parity validation — so you can cut over with confidence and zero downtime.
+Migrating data across clouds is painful, manual, and risky. Meridian automates the entire workflow — from discovery to cutover — so you can migrate with confidence and zero downtime.
 
 Built by engineers who have done it the hard way across AWS, GCP, Azure, and Oracle Cloud.
 
 ---
 
+## The complete migration workflow
+```bash
+# Step 1 — Discover what exists
+meridian scan-aws --profile default --region us-east-1
+meridian scan-oracle --profile default
+
+# Step 2 — Map network dependencies
+meridian map-aws --profile default
+meridian map-oracle --profile default
+
+# Step 3 — Analyze schema compatibility
+meridian analyze-schema \
+  --source-db prod-postgres-01 \
+  --target-db prod-carsdk-cluster
+
+# Step 4 — Replicate data live
+meridian replicate \
+  --source-db prod-postgres-01 \
+  --target-db prod-carsdk-cluster
+
+# Step 5 — Validate parity
+meridian validate \
+  --source-db prod-postgres-01 \
+  --target-db prod-carsdk-cluster
+
+# Step 6 — Cutover
+meridian cutover \
+  --source-db prod-postgres-01 \
+  --target-db prod-carsdk-cluster
+```
+
+---
+
+## Try it instantly — no credentials needed
+
+Every command supports `--mock` mode. No AWS or Oracle Cloud account required.
+```bash
+# Install
+git clone https://github.com/anujramh/meridian-migrate.git
+cd meridian-migrate
+python3 -m venv venv
+source venv/bin/activate
+pip install -e .
+
+# Run the full migration pipeline in mock mode
+meridian scan-aws --mock
+meridian scan-oracle --mock
+meridian map-aws --mock
+meridian map-oracle --mock
+meridian analyze-schema --source-db prod-postgres-01 --target-db prod-carsdk-cluster --mock
+meridian replicate --source-db prod-postgres-01 --target-db prod-carsdk-cluster --mock
+meridian validate --source-db prod-postgres-01 --target-db prod-carsdk-cluster --mock
+meridian cutover --source-db prod-postgres-01 --target-db prod-carsdk-cluster --mock
+```
+
+---
+
 ## What Meridian does
 
-- **Discovers** all resources in your cloud account automatically — no inventory needed
-- **Maps** dependencies between resources before migration starts
-- **Validates** schema compatibility between source and target clouds
-- **Replicates** data live with CDC-based streaming — zero downtime
-- **Validates parity** continuously — blocks cutover if drift is detected
-- **Orchestrates cutover** with automated rollback if error rates spike
+| Step | Command | What it does |
+|------|---------|--------------|
+| Discover | `scan-aws` / `scan-oracle` | Inventory all resources — compute, databases, storage |
+| Map | `map-aws` / `map-oracle` | Map network dependencies — VPCs, subnets, security groups |
+| Analyze | `analyze-schema` | Detect schema incompatibilities before migration starts |
+| Replicate | `replicate` | Live CDC-based data replication — zero downtime |
+| Validate | `validate` | Row count, checksum and sample parity checks |
+| Cutover | `cutover` | 8-step orchestrated cutover with automatic rollback |
 
 ---
 
@@ -28,105 +87,75 @@ Built by engineers who have done it the hard way across AWS, GCP, Azure, and Ora
 | GCP | 🔜 | 🔜 | 🔜 | 🔜 |
 | Azure | 🔜 | 🔜 | 🔜 | 🔜 |
 
----
-
 ## Supported migration paths
 
-- AWS → GCP
-- AWS → Azure
-- GCP → Oracle Cloud
-- Azure → AWS
-- Any → Any (expanding with community contributions)
-
----
-
-## Quickstart
-
-### Install
-```bash
-git clone https://github.com/anujramh/meridian-migrate.git
-cd meridian-migrate
-python3 -m venv venv
-source venv/bin/activate
-pip install -e .
-```
-
-### Try it instantly — no credentials needed
-```bash
-# Scan AWS (mock mode)
-meridian scan-aws --mock
-
-# Scan Oracle Cloud (mock mode)
-meridian scan-oracle --mock
-```
-
-### Scan a real AWS account
-```bash
-meridian scan-aws --profile default --region us-east-1
-```
-
-### Scan a real Oracle Cloud account
-```bash
-meridian scan-oracle --profile DEFAULT --region ap-mumbai-1 --compartment <compartment-ocid>
-```
-
-### Save inventory to file
-```bash
-meridian scan-aws --mock --output inventory.json
-meridian scan-oracle --mock --output inventory.json
-```
+- AWS → Oracle Cloud ✅
+- AWS → GCP 🔜
+- AWS → Azure 🔜
+- GCP → Oracle Cloud 🔜
+- Azure → AWS 🔜
 
 ---
 
 ## Example output
-```json
-{
-  "source": "oracle",
-  "region": "ap-mumbai-1",
-  "scanned_at": "2026-03-22T09:55:21.800625",
-  "mock": false,
-  "resources": {
-    "compute": [
-      {
-        "id": "ocid1.instance.oc1..xxxxx",
-        "name": "prod-app-server-01",
-        "shape": "VM.Standard2.2",
-        "status": "RUNNING",
-        "region": "ap-mumbai-1"
-      }
-    ],
-    "postgresql": [
-      {
-        "id": "ocid1.dbsystem.oc1..xxxxx",
-        "name": "prod-postgres-db-01",
-        "version": "14.9",
-        "status": "ACTIVE",
-        "region": "ap-mumbai-1"
-      }
-    ],
-    "object_storage": [
-      {
-        "name": "prod-assets-bucket",
-        "region": "ap-mumbai-1"
-      }
-    ]
-  }
-}
+
+### Schema analysis
+```
+──────────────────────────────────────────────────
+  Meridian — Schema Analysis Summary
+──────────────────────────────────────────────────
+  Source DB:  prod-postgres-01 (AWS RDS PostgreSQL 14.9)
+  Target DB:  prod-carsdk-cluster (Oracle Managed PostgreSQL 15.12)
+
+  ❌ Critical issues:  2
+  ⚠️  Warnings:         6
+  ✅ Passed checks:    4
+
+  CRITICAL — fix before migrating:
+  ❌ Extension timescaledb: not available on Oracle Managed PostgreSQL
+  ❌ wal_level: must be set to logical for CDC replication
+
+  🚫 NOT READY TO MIGRATE
+──────────────────────────────────────────────────
+```
+
+### Cutover
+```
+──────────────────────────────────────────────────
+  Meridian — Cutover Summary
+──────────────────────────────────────────────────
+  ✅ Step 1: Final parity check — all tables match
+  ✅ Step 2: Stop writes to source
+  ✅ Step 3: Apply final CDC events
+  ✅ Step 4: Final checksum verification
+  ✅ Step 5: Update connection strings
+  ✅ Step 6: Enable writes on target
+  ✅ Step 7: Health check — error rate 0.0%
+  ✅ Step 8: Disable source database
+
+  🎉 CUTOVER COMPLETE — 6 seconds downtime
+──────────────────────────────────────────────────
 ```
 
 ---
 
-## Roadmap
+## Project status
 
-- [x] AWS scanner — RDS, S3
-- [x] Oracle Cloud scanner — compute, PostgreSQL, object storage
-- [x] Mock mode for both clouds
+This project is under active development. The current release covers the complete mock workflow end to end. Real database connections and live replication engine are in development.
+
+- [x] AWS scanner
+- [x] Oracle Cloud scanner
+- [x] AWS network dependency mapper
+- [x] Oracle Cloud network dependency mapper
+- [x] Schema diff analyzer
+- [x] Replication engine (mock)
+- [x] Parity validator (mock)
+- [x] Cutover orchestrator (mock)
+- [ ] Real CDC replication engine
+- [ ] Real parity validation
+- [ ] Real cutover execution
 - [ ] GCP scanner
 - [ ] Azure scanner
-- [ ] Schema diff and compatibility checker
-- [ ] CDC-based live replication engine
-- [ ] Parity validator
-- [ ] Cutover orchestrator
 - [ ] Web dashboard
 
 ---
@@ -135,11 +164,6 @@ meridian scan-oracle --mock --output inventory.json
 
 Meridian is fully open source and community driven. All contributions welcome.
 
-- Found a bug? Open an issue
-- Want to add a cloud provider? Check `meridian/scanners/`
-- Want to add a migration playbook? Check `docs/playbooks/`
-- Questions? Start a discussion on GitHub
-
 See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ---
@@ -147,3 +171,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 ## License
 
 Apache 2.0 — free forever. See [LICENSE](LICENSE).
+
