@@ -204,5 +204,37 @@ def replicate(source_db, target_db, output, mock):
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
         raise click.Abort()  
+@cli.command()
+@click.option('--source-db', required=True, help='Source database name on AWS RDS')
+@click.option('--target-db', required=True, help='Target database name on Oracle Managed PostgreSQL')
+@click.option('--output', default=None, help='Save validation report to a JSON file')
+@click.option('--mock', is_flag=True, help='Simulate validation with mock data')
+def validate(source_db, target_db, output, mock):
+    """Validate data parity between source and target databases."""
+    try:
+        from meridian.validator import validator
+        from datetime import datetime
+
+        result = validator.validate(
+            source_db=source_db,
+            target_db=target_db,
+            mock=mock
+        )
+
+        if result is None:
+            return
+
+        validator.print_summary(result)
+
+        timestamp = datetime.utcnow().strftime('%Y-%m-%d-%H-%M')
+        filename = output or f"meridian-validation-{source_db}-to-{target_db}-{timestamp}.json"
+        with open(filename, 'w') as f:
+            json.dump(result, f, indent=2, default=str)
+        console.print(f"\n  Full report saved to: [bold]{filename}[/bold]\n")
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise click.Abort()
+    
 if __name__ == '__main__':
     cli()
