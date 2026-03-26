@@ -70,19 +70,61 @@ def scan_oracle(profile, region, compartment, output, mock):
 @click.option('--profile', default=None, help='AWS profile name from ~/.aws/credentials')
 @click.option('--region', default='us-east-1', help='AWS region to scan')
 @click.option('--output', default=None, help='Save output to a JSON file')
-def map_aws(profile, region, output):
+@click.option('--mock', is_flag=True, help='Run with mock data, no credentials needed')
+def map_aws(profile, region, output, mock):
     """Map network dependencies for AWS account."""
     try:
-        from meridian.mappers import network
-        from botocore.exceptions import NoCredentialsError
+        from meridian.mappers import aws_network
         from meridian.scanners import aws as aws_scanner
 
-        session = boto3.Session(profile_name=profile, region_name=region)
+        if mock:
+            result = aws_network.map_network(None, mock=True)
+        else:
+            session = boto3.Session(profile_name=profile, region_name=region)
+            rds_instances = aws_scanner.scan_rds(session)
+            result = aws_network.map_network(session, rds_instances=rds_instances)
 
-        # First scan RDS so we can map dependencies
-        rds_instances = aws_scanner.scan_rds(session)
+        if output:
+            with open(output, 'w') as f:
+                json.dump(result, f, indent=2, default=str)
+            console.print(f"\n[green]Dependency map saved to {output}[/green]")
+        else:
+            console.print("\n[bold]Dependency map:[/bold]")
+            console.print_json(json.dumps(result, indent=2, default=str))
 
-        result = network.map_network(session, rds_instances=rds_instances)
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise click.Abort()
+    
+
+@cli.command()
+@click.option('--profile', default='DEFAULT', help='OCI profile from ~/.oci/config')
+@click.option('--compartment', default=None, help='Oracle Cloud compartment OCID')
+@click.option('--output', default=None, help='Save output to a JSON file')
+@click.option('--mock', is_flag=True, help='Run with mock data, no credentials needed')
+def map_oracle(profile, compartment, output, mock):
+    """Map network dependencies for Oracle Cloud account."""
+    try:
+        import oci
+        from meridian.mappers import oracle_network
+        from meridian.scanners import oracle as oracle_scanner
+
+        if mock:
+            result = oracle_network.map_network(mock=True)
+        else:
+            config = oci.config.from_file(profile_name=profile)
+            if not compartment:
+                compartment = config.get('compartment') or config.get('tenancy')
+            inventory = oracle_scanner.scan(
+                profile=profile,
+                compartment_id=compartment
+            )
+            databases = inventory['resources'].get('postgresql', [])
+            result = oracle_network.map_network(
+                config=config,
+                compartment_id=compartment,
+                databases=databases
+            )
 
         if output:
             with open(output, 'w') as f:
