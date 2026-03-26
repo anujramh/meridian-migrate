@@ -318,6 +318,54 @@ def scan_rds(host, port, database, user, password, output, env):
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
         raise click.Abort()
-       
+
+@cli.command()
+@click.option('--host', default=None, help='Oracle PostgreSQL endpoint')
+@click.option('--port', default=5432, help='Database port')
+@click.option('--database', default=None, help='Database name')
+@click.option('--user', default=None, help='Database user')
+@click.option('--password', default=None, help='Database password')
+@click.option('--output', default=None, help='Save output to a JSON file')
+@click.option('--env', is_flag=True, help='Load credentials from .env file')
+def scan_oracle_db(host, port, database, user, password, output, env):
+    """Scan a real Oracle Managed PostgreSQL database — tables, extensions, indexes, parameters."""
+    try:
+        from meridian.scanners import oracle as oracle_scanner
+
+        if env:
+            from dotenv import load_dotenv
+            load_dotenv()
+            host = host or os.getenv('ORACLE_PG_HOST')
+            port = port or int(os.getenv('ORACLE_PG_PORT', 5432))
+            database = database or os.getenv('ORACLE_PG_DATABASE')
+            user = user or os.getenv('ORACLE_PG_USER')
+            password = password or os.getenv('ORACLE_PG_PASSWORD')
+
+        if not all([host, database, user, password]):
+            console.print("[red]Missing credentials — use --env to load from .env file[/red]")
+            raise click.Abort()
+
+        result = oracle_scanner.scan_oracle_database(
+            host=host,
+            port=port,
+            database=database,
+            user=user,
+            password=password
+        )
+
+        oracle_scanner.print_oracle_db_summary(result)
+
+        from datetime import datetime
+        timestamp = datetime.utcnow().strftime('%Y-%m-%d-%H-%M')
+        filename = output or f"meridian-oracle-scan-{result['database']}-{timestamp}.json"
+        with open(filename, 'w') as f:
+            json.dump(result, f, indent=2, default=str)
+        console.print(f"\n  Full report saved to: [bold]{filename}[/bold]\n")
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise click.Abort()  
+    
+
 if __name__ == '__main__':
     cli()
