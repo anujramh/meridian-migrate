@@ -138,5 +138,33 @@ def map_oracle(profile, compartment, output, mock):
         console.print(f"[red]Error: {e}[/red]")
         raise click.Abort()
 
+@cli.command()
+@click.option('--output', default=None, help='Save full report to a JSON file')
+@click.option('--mock', is_flag=True, help='Run with mock data, no credentials needed')
+def analyze_schema(output, mock):
+    """Analyze schema compatibility between AWS RDS PostgreSQL and Oracle Managed PostgreSQL."""
+    try:
+        from meridian.analyzers import schema_diff
+        from datetime import datetime
+
+        result = schema_diff.analyze(mock=mock)
+
+        if result is None:
+            return
+
+        # Always print summary to terminal
+        schema_diff.print_summary(result)
+
+        # Always save full report to file
+        timestamp = datetime.utcnow().strftime('%Y-%m-%d-%H-%M')
+        filename = output or f"meridian-schema-diff-{timestamp}.json"
+        with open(filename, 'w') as f:
+            json.dump(result, f, indent=2, default=str)
+        console.print(f"\n  Full report saved to: [bold]{filename}[/bold]\n")
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise click.Abort()
+    
 if __name__ == '__main__':
     cli()
