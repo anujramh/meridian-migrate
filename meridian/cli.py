@@ -139,25 +139,32 @@ def map_oracle(profile, compartment, output, mock):
         raise click.Abort()
 
 @cli.command()
+@click.option('--source-db', required=True, help='Source database name on AWS RDS')
+@click.option('--target-db', required=True, help='Target database name on Oracle Managed PostgreSQL')
 @click.option('--output', default=None, help='Save full report to a JSON file')
 @click.option('--mock', is_flag=True, help='Run with mock data, no credentials needed')
-def analyze_schema(output, mock):
-    """Analyze schema compatibility between AWS RDS PostgreSQL and Oracle Managed PostgreSQL."""
+def analyze_schema(source_db, target_db, output, mock):
+    """Analyze schema compatibility between a specific AWS RDS and Oracle Managed PostgreSQL database."""
     try:
         from meridian.analyzers import schema_diff
         from datetime import datetime
 
-        result = schema_diff.analyze(mock=mock)
+        console.print(f"  Source DB: [bold]{source_db}[/bold]")
+        console.print(f"  Target DB: [bold]{target_db}[/bold]")
+
+        result = schema_diff.analyze(
+            mock=mock,
+            source_db=source_db,
+            target_db=target_db
+        )
 
         if result is None:
             return
 
-        # Always print summary to terminal
         schema_diff.print_summary(result)
 
-        # Always save full report to file
         timestamp = datetime.utcnow().strftime('%Y-%m-%d-%H-%M')
-        filename = output or f"meridian-schema-diff-{timestamp}.json"
+        filename = output or f"meridian-schema-diff-{source_db}-to-{target_db}-{timestamp}.json"
         with open(filename, 'w') as f:
             json.dump(result, f, indent=2, default=str)
         console.print(f"\n  Full report saved to: [bold]{filename}[/bold]\n")
@@ -165,6 +172,37 @@ def analyze_schema(output, mock):
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
         raise click.Abort()
-    
+
+@cli.command()
+@click.option('--source-db', required=True, help='Source database name on AWS RDS')
+@click.option('--target-db', required=True, help='Target database name on Oracle Managed PostgreSQL')
+@click.option('--output', default=None, help='Save replication report to a JSON file')
+@click.option('--mock', is_flag=True, help='Simulate replication with mock data')
+def replicate(source_db, target_db, output, mock):
+    """Replicate data from AWS RDS PostgreSQL to Oracle Managed PostgreSQL."""
+    try:
+        from meridian.replicator import replicator
+        from datetime import datetime
+
+        result = replicator.replicate(
+            source_db=source_db,
+            target_db=target_db,
+            mock=mock
+        )
+
+        if result is None:
+            return
+
+        replicator.print_summary(result)
+
+        timestamp = datetime.utcnow().strftime('%Y-%m-%d-%H-%M')
+        filename = output or f"meridian-replication-{source_db}-to-{target_db}-{timestamp}.json"
+        with open(filename, 'w') as f:
+            json.dump(result, f, indent=2, default=str)
+        console.print(f"\n  Full report saved to: [bold]{filename}[/bold]\n")
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise click.Abort()  
 if __name__ == '__main__':
     cli()

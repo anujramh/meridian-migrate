@@ -141,8 +141,8 @@ def print_summary(result):
     console.print("\n" + "─" * 50)
     console.print("[bold magenta]  Meridian — Schema Analysis Summary[/bold magenta]")
     console.print("─" * 50)
-    console.print(f"  Source:  AWS RDS PostgreSQL {result['postgresql_versions']['source']}")
-    console.print(f"  Target:  Oracle Managed PostgreSQL {result['postgresql_versions']['target']}")
+    console.print(f"  Source DB:  {result.get('source_db', 'unknown')} (AWS RDS PostgreSQL {result['postgresql_versions']['source']})")
+    console.print(f"  Target DB:  {result.get('target_db', 'unknown')} (Oracle Managed PostgreSQL {result['postgresql_versions']['target']})")
     console.print(f"  Analyzed: {result['analyzed_at']}")
     console.print()
     console.print(f"  [red]❌ Critical issues:  {summary['critical']}[/red]")
@@ -183,13 +183,15 @@ def print_summary(result):
     console.print("─" * 50)
 
 
-def analyze(mock=False):
+def analyze(mock=False, source_db=None, target_db=None):
     console.print(f"\n[bold magenta]Meridian — Schema Diff Analyzer[/bold magenta]")
     console.print(f"Path: [yellow]AWS RDS PostgreSQL → Oracle Managed PostgreSQL[/yellow]\n")
 
     if mock:
-        return analyze_mock()
+        result = analyze_mock()
+        result['source_db'] = source_db
+        result['target_db'] = target_db
+        return result
 
-    # Real analysis comes later
     console.print("[red]Real mode not yet implemented — use --mock for now[/red]")
     return None
