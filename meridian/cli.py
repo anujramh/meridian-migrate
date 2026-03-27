@@ -144,19 +144,42 @@ def map_oracle(profile, compartment, output, mock):
 @click.option('--target-db', required=True, help='Target database name on Oracle Managed PostgreSQL')
 @click.option('--output', default=None, help='Save full report to a JSON file')
 @click.option('--mock', is_flag=True, help='Run with mock data, no credentials needed')
-def analyze_schema(source_db, target_db, output, mock):
-    """Analyze schema compatibility between a specific AWS RDS and Oracle Managed PostgreSQL database."""
+@click.option('--env', is_flag=True, help='Load credentials from .env file')
+def analyze_schema(source_db, target_db, output, mock, env):
+    """Analyze schema compatibility between AWS RDS PostgreSQL and Oracle Managed PostgreSQL."""
     try:
         from meridian.analyzers import schema_diff
         from datetime import datetime
 
-        console.print(f"  Source DB: [bold]{source_db}[/bold]")
-        console.print(f"  Target DB: [bold]{target_db}[/bold]")
+        source_config = None
+        target_config = None
+
+        if env and not mock:
+            from dotenv import load_dotenv
+            load_dotenv()
+            source_config = {
+                "host": os.getenv('AWS_RDS_HOST'),
+                "port": int(os.getenv('AWS_RDS_PORT', 5432)),
+                "database": os.getenv('AWS_RDS_DATABASE'),
+                "user": os.getenv('AWS_RDS_USER'),
+                "password": os.getenv('AWS_RDS_PASSWORD'),
+                "sslmode": "prefer"
+            }
+            target_config = {
+                "host": os.getenv('ORACLE_PG_HOST'),
+                "port": int(os.getenv('ORACLE_PG_PORT', 5432)),
+                "database": os.getenv('ORACLE_PG_DATABASE'),
+                "user": os.getenv('ORACLE_PG_USER'),
+                "password": os.getenv('ORACLE_PG_PASSWORD'),
+                "sslmode": "require"
+            }
 
         result = schema_diff.analyze(
             mock=mock,
             source_db=source_db,
-            target_db=target_db
+            target_db=target_db,
+            source_config=source_config,
+            target_config=target_config
         )
 
         if result is None:
