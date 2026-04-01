@@ -25,7 +25,8 @@ def get_aws_config(env, host=None, port=None, database=None, user=None, password
         "password": password or os.getenv('AWS_RDS_PASSWORD'),
         "profile": profile or os.getenv('AWS_PROFILE', 'meridian-readonly'),
         "region": region or os.getenv('AWS_REGION', 'us-east-1'),
-        "sslmode": "prefer"
+        "sslmode": os.getenv('AWS_RDS_SSLMODE', 'prefer'),
+        "sslrootcert": os.getenv('AWS_RDS_SSLROOTCERT', '')
     }
 
 
@@ -33,6 +34,7 @@ def get_oracle_config(env, host=None, port=None, database=None, user=None, passw
     load_env_if_needed(env)
     return {
         "host": host or os.getenv('ORACLE_PG_HOST'),
+        "fqdn": os.getenv('ORACLE_PG_FQDN') or host or os.getenv('ORACLE_PG_HOST'), 
         "port": int(port or os.getenv('ORACLE_PG_PORT', 5432)),
         "database": database or os.getenv('ORACLE_PG_DATABASE'),
         "user": user or os.getenv('ORACLE_PG_USER'),
@@ -335,10 +337,29 @@ def replicate(source_db, target_db, output, mock, env):
         source_db = source_db or src_cfg['database']
         target_db = target_db or tgt_cfg['database']
 
+        db_source_config = {
+            "host": src_cfg['host'],
+            "port": src_cfg['port'],
+            "database": src_cfg['database'],
+            "user": src_cfg['user'],
+            "password": src_cfg['password'],
+            "sslmode": src_cfg.get('sslmode', 'prefer')
+        }
+        db_target_config = {
+            "host": tgt_cfg['host'],
+            "port": tgt_cfg['port'],
+            "database": tgt_cfg['database'],
+            "user": tgt_cfg['user'],
+            "password": tgt_cfg['password'],
+            "sslmode": tgt_cfg.get('sslmode', 'require')
+        }
+
         result = replicator.replicate(
             source_db=source_db,
             target_db=target_db,
-            mock=mock
+            mock=mock,
+            source_config=None if mock else db_source_config,
+            target_config=None if mock else db_target_config
         )
 
         if result is None:
@@ -375,10 +396,29 @@ def validate(source_db, target_db, output, mock, env):
         source_db = source_db or src_cfg['database']
         target_db = target_db or tgt_cfg['database']
 
+        db_source_config = {
+            "host": src_cfg['host'],
+            "port": src_cfg['port'],
+            "database": src_cfg['database'],
+            "user": src_cfg['user'],
+            "password": src_cfg['password'],
+            "sslmode": src_cfg.get('sslmode', 'prefer')
+        }
+        db_target_config = {
+            "host": tgt_cfg['host'],
+            "port": tgt_cfg['port'],
+            "database": tgt_cfg['database'],
+            "user": tgt_cfg['user'],
+            "password": tgt_cfg['password'],
+            "sslmode": tgt_cfg.get('sslmode', 'require')
+        }
+
         result = validator.validate(
             source_db=source_db,
             target_db=target_db,
-            mock=mock
+            mock=mock,
+            source_config=None if mock else db_source_config,
+            target_config=None if mock else db_target_config
         )
 
         if result is None:
@@ -415,10 +455,29 @@ def cutover(source_db, target_db, output, mock, env):
         source_db = source_db or src_cfg['database']
         target_db = target_db or tgt_cfg['database']
 
+        db_source_config = {
+            "host": src_cfg['host'],
+            "port": src_cfg['port'],
+            "database": src_cfg['database'],
+            "user": src_cfg['user'],
+            "password": src_cfg['password'],
+            "sslmode": src_cfg.get('sslmode', 'prefer')
+        }
+        db_target_config = {
+            "host": tgt_cfg['host'],
+            "port": tgt_cfg['port'],
+            "database": tgt_cfg['database'],
+            "user": tgt_cfg['user'],
+            "password": tgt_cfg['password'],
+            "sslmode": tgt_cfg.get('sslmode', 'require')
+        }
+
         result = cutover_module.cutover(
             source_db=source_db,
             target_db=target_db,
-            mock=mock
+            mock=mock,
+            source_config=None if mock else db_source_config,
+            target_config=None if mock else db_target_config
         )
 
         if result is None:
@@ -435,6 +494,8 @@ def cutover(source_db, target_db, output, mock, env):
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
         raise click.Abort()
+
+   
 
 
 @cli.command()
@@ -454,6 +515,7 @@ def fix_schema(output, source_host, target_host, env):
         console.print(f"\n[bold blue]Step 1: Dumping schema from source...[/bold blue]")
 
         env_vars = {**os.environ, 'PGPASSWORD': src_cfg['password']}
+
         dump_cmd = [
             'pg_dump',
             '-h', src_cfg['host'],
@@ -463,6 +525,7 @@ def fix_schema(output, source_host, target_host, env):
             '--schema-only',
             '--no-owner',
             '--no-privileges',
+            '--exclude-schema=pglogical',
             '-f', output
         ]
 
@@ -495,6 +558,98 @@ def fix_schema(output, source_host, target_host, env):
         console.print(f"[red]Error: {e}[/red]")
         raise click.Abort()
 
+@cli.command()
+@click.option('--env', is_flag=True, help='Load credentials from .env file')
+@click.option('--output', default=None, help='Save cleanup report to a JSON file')
+def cleanup(env, output):
+    """Remove pglogical nodes and subscriptions after successful cutover."""
+    try:
+        from datetime import datetime
+        import psycopg2
 
+        src_cfg = get_aws_config(env)
+        tgt_cfg = get_oracle_config(env)
+
+        console.print(f"\n[bold magenta]Meridian — Post-cutover Cleanup[/bold magenta]")
+        console.print(f"  Source: [yellow]{src_cfg['database']}[/yellow]")
+        console.print(f"  Target: [yellow]{tgt_cfg['database']}[/yellow]\n")
+
+        console.print("[bold red]⚠️  This will remove all pglogical replication objects.[/bold red]")
+        console.print("[yellow]Only run this after cutover is confirmed successful.[/yellow]\n")
+
+        # Confirm
+        confirm = click.confirm("Are you sure you want to cleanup pglogical objects?")
+        if not confirm:
+            console.print("[yellow]Cleanup cancelled[/yellow]")
+            return
+
+        results = []
+
+        def run_sql(host, port, db, user, password, sql, sslmode, description):
+            try:
+                conn = psycopg2.connect(
+                    host=host, port=port, database=db,
+                    user=user, password=password, sslmode=sslmode
+                )
+                conn.autocommit = True
+                cur = conn.cursor()
+                cur.execute(sql)
+                conn.close()
+                console.print(f"[green]✅ {description}[/green]")
+                results.append({"action": description, "status": "success"})
+            except Exception as e:
+                console.print(f"[yellow]⚠️  {description}: {e}[/yellow]")
+                results.append({"action": description, "status": "skipped", "reason": str(e)})
+
+        console.print("[bold blue]Cleaning up target (Oracle Cloud)...[/bold blue]")
+        run_sql(
+            tgt_cfg['host'], tgt_cfg['port'], tgt_cfg['database'],
+            tgt_cfg['user'], tgt_cfg['password'],
+            "SELECT pglogical.drop_subscription('meridian_subscription', true)",
+            tgt_cfg.get('sslmode', 'require'),
+            "Dropped subscription on target"
+        )
+        run_sql(
+            tgt_cfg['host'], tgt_cfg['port'], tgt_cfg['database'],
+            tgt_cfg['user'], tgt_cfg['password'],
+            "SELECT pglogical.drop_node('meridian_subscriber', true)",
+            tgt_cfg.get('sslmode', 'require'),
+            "Dropped subscriber node on target"
+        )
+
+        console.print("\n[bold blue]Cleaning up source (AWS RDS)...[/bold blue]")
+        run_sql(
+            src_cfg['host'], src_cfg['port'], src_cfg['database'],
+            src_cfg['user'], src_cfg['password'],
+            "SELECT pglogical.drop_replication_set('meridian_set')",
+            src_cfg.get('sslmode', 'prefer'),
+            "Dropped replication set on source"
+        )
+        run_sql(
+            src_cfg['host'], src_cfg['port'], src_cfg['database'],
+            src_cfg['user'], src_cfg['password'],
+            "SELECT pglogical.drop_node('meridian_provider', true)",
+            src_cfg.get('sslmode', 'prefer'),
+            "Dropped provider node on source"
+        )
+
+        console.print("\n[bold green]🎉 Cleanup complete — migration fully finalized[/bold green]")
+        console.print("[green]All pglogical replication objects removed from both databases[/green]")
+
+        timestamp = datetime.utcnow().strftime('%Y-%m-%d-%H-%M')
+        filename = output or f"meridian-cleanup-{src_cfg['database']}-to-{tgt_cfg['database']}-{timestamp}.json"
+        with open(filename, 'w') as f:
+            json.dump({
+                "cleaned_at": datetime.utcnow().isoformat(),
+                "source_db": src_cfg['database'],
+                "target_db": tgt_cfg['database'],
+                "actions": results
+            }, f, indent=2)
+        console.print(f"\n  Report saved to: [bold]{filename}[/bold]\n")
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise click.Abort()
+    
 if __name__ == '__main__':
     cli()

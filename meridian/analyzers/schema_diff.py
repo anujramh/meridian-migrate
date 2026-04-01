@@ -400,6 +400,47 @@ def analyze_real(source_config, target_config):
     else:
         console.print(f"[green]Target reachable — {tgt_latency}ms[/green]")
 
+    # DNS resolution check
+    console.print("[bold blue]Checking DNS resolution...[/bold blue]")
+    import socket
+    dns_issues = []
+
+    # Can we resolve source hostname?
+    try:
+        src_ip = socket.gethostbyname(src_host)
+        console.print(f"[green]Source hostname resolves to {src_ip} ✅[/green]")
+    except socket.gaierror:
+        dns_issues.append({
+            "severity": "critical",
+            "issue": f"Cannot resolve source hostname: {src_host}",
+            "action": "Add DNS A record for source hostname in target cloud private DNS"
+        })
+        issues.append("dns_source")
+
+    # Can we resolve target hostname?
+    try:
+        tgt_ip = socket.gethostbyname(tgt_host)
+        console.print(f"[green]Target hostname resolves to {tgt_ip} ✅[/green]")
+    except socket.gaierror:
+        dns_issues.append({
+            "severity": "critical",
+            "issue": f"Cannot resolve target hostname: {tgt_host}",
+            "action": "Add DNS A record for target hostname in source cloud private DNS"
+        })
+        issues.append("dns_target")
+
+    # Check ORACLE_PG_FQDN is set
+    oracle_fqdn = target_config.get('fqdn')
+    if not oracle_fqdn:
+        dns_issues.append({
+            "severity": "warning",
+            "issue": "ORACLE_PG_FQDN not set — pglogical subscriber node may use IP instead of FQDN",
+            "action": "Add ORACLE_PG_FQDN=<your-oracle-fqdn> to .env file"
+        })
+        warnings.append("oracle_fqdn")
+    else:
+        console.print(f"[green]ORACLE_PG_FQDN set to {oracle_fqdn} ✅[/green]")
+
     # Connect to databases
     console.print("[bold blue]Connecting to source database...[/bold blue]")
     source = get_db_info(
@@ -671,8 +712,19 @@ def analyze_real(source_config, target_config):
         })
         warnings.append("existing_subscriptions")
 
-    # SSL
-    console.print("[bold blue]Checking SSL configuration...[/bold blue]")
+   # SSL mode check
+    console.print("[bold blue]Checking SSL configuration for VPN...[/bold blue]")
+    ssl_issues = []
+    src_sslmode = source_config.get('sslmode', 'prefer')
+    if src_sslmode not in ('disable', 'require'):
+        ssl_issues.append({
+            "severity": "warning",
+            "issue": f"AWS_RDS_SSLMODE={src_sslmode} — for VPN connections use disable or require",
+            "action": "Set AWS_RDS_SSLMODE=disable in .env if connecting over VPN"
+        })
+        warnings.append("sslmode")
+    else:
+        console.print(f"[green]AWS_RDS_SSLMODE={src_sslmode} ✅[/green]")
 
     # Parameter differences
     param_differences = []
@@ -709,6 +761,17 @@ def analyze_real(source_config, target_config):
             "target_to_source": {"reachable": None, "note": "Verify connectivity from target side manually"},
             "issues": network_issues
         },
+        "dns": {
+            "source_resolves": "dns_source" not in issues,
+            "target_resolves": "dns_target" not in issues,
+            "oracle_fqdn": oracle_fqdn,
+            "issues": dns_issues
+        },
+        "ssl_config": {
+            "source_sslmode": src_sslmode,
+            "issues": ssl_issues
+        },
+        
         "pglogical": {
             "source_available": source['pglogical_available'],
             "source_installed": source['pglogical_installed'],
@@ -823,6 +886,29 @@ def print_summary(result):
     for issue in net.get('issues', []):
         console.print(f"  [red]❌ {issue['issue']}[/red]")
         console.print(f"     Action: {issue['action']}")
+
+
+    # DNS
+    dns = result.get('dns', {})
+    if dns:
+        console.print("\n  [bold]DNS resolution:[/bold]")
+        if dns.get('source_resolves'):
+            console.print("  [green]✅ Source hostname resolves[/green]")
+        else:
+            console.print("  [red]❌ Source hostname cannot be resolved[/red]")
+        if dns.get('target_resolves'):
+            console.print("  [green]✅ Target hostname resolves[/green]")
+        else:
+            console.print("  [red]❌ Target hostname cannot be resolved[/red]")
+        if dns.get('oracle_fqdn'):
+            console.print(f"  [green]✅ ORACLE_PG_FQDN={dns['oracle_fqdn']}[/green]")
+        for issue in dns.get('issues', []):
+            if issue['severity'] == 'critical':
+                console.print(f"  [red]❌ {issue['issue']}[/red]")
+            else:
+                console.print(f"  [yellow]⚠️  {issue['issue']}[/yellow]")
+            console.print(f"     Action: {issue['action']}")
+
 
     # pglogical
     console.print("\n  [bold]pglogical:[/bold]")
