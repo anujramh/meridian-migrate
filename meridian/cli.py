@@ -6,8 +6,41 @@ from rich.console import Console
 from meridian.scanners import aws
 from meridian.scanners import oracle
 
-
 console = Console()
+
+
+def load_env_if_needed(env_flag):
+    if env_flag:
+        from dotenv import load_dotenv
+        load_dotenv()
+
+
+def get_aws_config(env, host=None, port=None, database=None, user=None, password=None, profile=None, region=None):
+    load_env_if_needed(env)
+    return {
+        "host": host or os.getenv('AWS_RDS_HOST'),
+        "port": int(port or os.getenv('AWS_RDS_PORT', 5432)),
+        "database": database or os.getenv('AWS_RDS_DATABASE'),
+        "user": user or os.getenv('AWS_RDS_USER'),
+        "password": password or os.getenv('AWS_RDS_PASSWORD'),
+        "profile": profile or os.getenv('AWS_PROFILE', 'meridian-readonly'),
+        "region": region or os.getenv('AWS_REGION', 'us-east-1'),
+        "sslmode": "prefer"
+    }
+
+
+def get_oracle_config(env, host=None, port=None, database=None, user=None, password=None, profile=None, compartment=None):
+    load_env_if_needed(env)
+    return {
+        "host": host or os.getenv('ORACLE_PG_HOST'),
+        "port": int(port or os.getenv('ORACLE_PG_PORT', 5432)),
+        "database": database or os.getenv('ORACLE_PG_DATABASE'),
+        "user": user or os.getenv('ORACLE_PG_USER'),
+        "password": password or os.getenv('ORACLE_PG_PASSWORD'),
+        "profile": profile or os.getenv('OCI_PROFILE', 'meridian-readonly'),
+        "compartment": compartment or os.getenv('OCI_COMPARTMENT'),
+        "sslmode": "require"
+    }
 
 
 @click.group()
@@ -17,14 +50,16 @@ def cli():
 
 
 @cli.command()
-@click.option('--profile', default=None, help='AWS profile name from ~/.aws/credentials')
-@click.option('--region', default='us-east-1', help='AWS region to scan')
+@click.option('--profile', default=None, help='AWS profile (default: AWS_PROFILE from .env)')
+@click.option('--region', default=None, help='AWS region (default: AWS_REGION from .env)')
 @click.option('--output', default=None, help='Save output to a JSON file')
 @click.option('--mock', is_flag=True, help='Run with mock data, no credentials needed')
-def scan_aws(profile, region, output, mock):
+@click.option('--env', is_flag=True, help='Load credentials from .env file')
+def scan_aws(profile, region, output, mock, env):
     """Scan AWS account and generate resource inventory."""
     try:
-        inventory = aws.scan(profile=profile, region=region, mock=mock)
+        cfg = get_aws_config(env, profile=profile, region=region)
+        inventory = aws.scan(profile=cfg['profile'], region=cfg['region'], mock=mock)
 
         if output:
             with open(output, 'w') as f:
@@ -40,19 +75,21 @@ def scan_aws(profile, region, output, mock):
 
 
 @cli.command()
-@click.option('--profile', default='DEFAULT', help='OCI profile from ~/.oci/config')
-@click.option('--region', default='ap-mumbai-1', help='Oracle Cloud region to scan')
-@click.option('--compartment', default=None, help='Oracle Cloud compartment OCID (defaults to root)')
+@click.option('--profile', default=None, help='OCI profile (default: OCI_PROFILE from .env)')
+@click.option('--region', default=None, help='Oracle Cloud region (default: ap-mumbai-1)')
+@click.option('--compartment', default=None, help='Oracle compartment OCID (default: OCI_COMPARTMENT from .env)')
 @click.option('--output', default=None, help='Save output to a JSON file')
 @click.option('--mock', is_flag=True, help='Run with mock data, no credentials needed')
-def scan_oracle(profile, region, compartment, output, mock):
+@click.option('--env', is_flag=True, help='Load credentials from .env file')
+def scan_oracle(profile, region, compartment, output, mock, env):
     """Scan Oracle Cloud account and generate resource inventory."""
     try:
+        cfg = get_oracle_config(env, profile=profile, compartment=compartment)
         inventory = oracle.scan(
-            profile=profile,
-            region=region,
+            profile=cfg['profile'],
+            region=region or 'ap-mumbai-1',
             mock=mock,
-            compartment_id=compartment
+            compartment_id=cfg['compartment']
         )
 
         if output:
@@ -67,21 +104,25 @@ def scan_oracle(profile, region, compartment, output, mock):
         console.print(f"[red]Error: {e}[/red]")
         raise click.Abort()
 
+
 @cli.command()
-@click.option('--profile', default=None, help='AWS profile name from ~/.aws/credentials')
-@click.option('--region', default='us-east-1', help='AWS region to scan')
+@click.option('--profile', default=None, help='AWS profile (default: AWS_PROFILE from .env)')
+@click.option('--region', default=None, help='AWS region (default: AWS_REGION from .env)')
 @click.option('--output', default=None, help='Save output to a JSON file')
 @click.option('--mock', is_flag=True, help='Run with mock data, no credentials needed')
-def map_aws(profile, region, output, mock):
+@click.option('--env', is_flag=True, help='Load credentials from .env file')
+def map_aws(profile, region, output, mock, env):
     """Map network dependencies for AWS account."""
     try:
         from meridian.mappers import aws_network
         from meridian.scanners import aws as aws_scanner
 
+        cfg = get_aws_config(env, profile=profile, region=region)
+
         if mock:
             result = aws_network.map_network(None, mock=True)
         else:
-            session = boto3.Session(profile_name=profile, region_name=region)
+            session = boto3.Session(profile_name=cfg['profile'], region_name=cfg['region'])
             rds_instances = aws_scanner.scan_rds(session)
             result = aws_network.map_network(session, rds_instances=rds_instances)
 
@@ -96,34 +137,35 @@ def map_aws(profile, region, output, mock):
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
         raise click.Abort()
-    
+
 
 @cli.command()
-@click.option('--profile', default='DEFAULT', help='OCI profile from ~/.oci/config')
-@click.option('--compartment', default=None, help='Oracle Cloud compartment OCID')
+@click.option('--profile', default=None, help='OCI profile (default: OCI_PROFILE from .env)')
+@click.option('--compartment', default=None, help='Oracle compartment OCID (default: OCI_COMPARTMENT from .env)')
 @click.option('--output', default=None, help='Save output to a JSON file')
 @click.option('--mock', is_flag=True, help='Run with mock data, no credentials needed')
-def map_oracle(profile, compartment, output, mock):
+@click.option('--env', is_flag=True, help='Load credentials from .env file')
+def map_oracle(profile, compartment, output, mock, env):
     """Map network dependencies for Oracle Cloud account."""
     try:
         import oci
         from meridian.mappers import oracle_network
         from meridian.scanners import oracle as oracle_scanner
 
+        cfg = get_oracle_config(env, profile=profile, compartment=compartment)
+
         if mock:
             result = oracle_network.map_network(mock=True)
         else:
-            config = oci.config.from_file(profile_name=profile)
-            if not compartment:
-                compartment = config.get('compartment') or config.get('tenancy')
+            oci_config = oci.config.from_file(profile_name=cfg['profile'])
             inventory = oracle_scanner.scan(
-                profile=profile,
-                compartment_id=compartment
+                profile=cfg['profile'],
+                compartment_id=cfg['compartment']
             )
             databases = inventory['resources'].get('postgresql', [])
             result = oracle_network.map_network(
-                config=config,
-                compartment_id=compartment,
+                config=oci_config,
+                compartment_id=cfg['compartment'],
                 databases=databases
             )
 
@@ -139,40 +181,117 @@ def map_oracle(profile, compartment, output, mock):
         console.print(f"[red]Error: {e}[/red]")
         raise click.Abort()
 
+
 @cli.command()
-@click.option('--source-db', required=True, help='Source database name on AWS RDS')
-@click.option('--target-db', required=True, help='Target database name on Oracle Managed PostgreSQL')
+@click.option('--host', default=None, help='RDS endpoint (default: AWS_RDS_HOST from .env)')
+@click.option('--port', default=None, help='Database port (default: AWS_RDS_PORT from .env)')
+@click.option('--database', default=None, help='Database name (default: AWS_RDS_DATABASE from .env)')
+@click.option('--user', default=None, help='Database user (default: AWS_RDS_USER from .env)')
+@click.option('--password', default=None, help='Database password (default: AWS_RDS_PASSWORD from .env)')
+@click.option('--output', default=None, help='Save output to a JSON file')
+@click.option('--env', is_flag=True, help='Load credentials from .env file')
+def scan_rds(host, port, database, user, password, output, env):
+    """Scan a real AWS RDS PostgreSQL database — tables, extensions, indexes, parameters."""
+    try:
+        cfg = get_aws_config(env, host=host, port=port, database=database, user=user, password=password)
+
+        if not all([cfg['host'], cfg['database'], cfg['user'], cfg['password']]):
+            console.print("[red]Missing credentials — use --env or pass --host --database --user --password[/red]")
+            raise click.Abort()
+
+        result = aws.scan_rds_database(
+            host=cfg['host'],
+            port=cfg['port'],
+            database=cfg['database'],
+            user=cfg['user'],
+            password=cfg['password']
+        )
+
+        aws.print_rds_summary(result)
+
+        from datetime import datetime
+        timestamp = datetime.utcnow().strftime('%Y-%m-%d-%H-%M')
+        filename = output or f"meridian-rds-scan-{result['database']}-{timestamp}.json"
+        with open(filename, 'w') as f:
+            json.dump(result, f, indent=2, default=str)
+        console.print(f"\n  Full report saved to: [bold]{filename}[/bold]\n")
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise click.Abort()
+
+
+@cli.command()
+@click.option('--host', default=None, help='Oracle PostgreSQL endpoint (default: ORACLE_PG_HOST from .env)')
+@click.option('--port', default=None, help='Database port (default: ORACLE_PG_PORT from .env)')
+@click.option('--database', default=None, help='Database name (default: ORACLE_PG_DATABASE from .env)')
+@click.option('--user', default=None, help='Database user (default: ORACLE_PG_USER from .env)')
+@click.option('--password', default=None, help='Database password (default: ORACLE_PG_PASSWORD from .env)')
+@click.option('--output', default=None, help='Save output to a JSON file')
+@click.option('--env', is_flag=True, help='Load credentials from .env file')
+def scan_oracle_db(host, port, database, user, password, output, env):
+    """Scan a real Oracle Managed PostgreSQL database — tables, extensions, indexes, parameters."""
+    try:
+        cfg = get_oracle_config(env, host=host, port=port, database=database, user=user, password=password)
+
+        if not all([cfg['host'], cfg['database'], cfg['user'], cfg['password']]):
+            console.print("[red]Missing credentials — use --env or pass --host --database --user --password[/red]")
+            raise click.Abort()
+
+        result = oracle.scan_oracle_database(
+            host=cfg['host'],
+            port=cfg['port'],
+            database=cfg['database'],
+            user=cfg['user'],
+            password=cfg['password']
+        )
+
+        oracle.print_oracle_db_summary(result)
+
+        from datetime import datetime
+        timestamp = datetime.utcnow().strftime('%Y-%m-%d-%H-%M')
+        filename = output or f"meridian-oracle-scan-{result['database']}-{timestamp}.json"
+        with open(filename, 'w') as f:
+            json.dump(result, f, indent=2, default=str)
+        console.print(f"\n  Full report saved to: [bold]{filename}[/bold]\n")
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise click.Abort()
+
+
+@cli.command()
+@click.option('--source-db', default=None, help='Source DB name (default: AWS_RDS_DATABASE from .env)')
+@click.option('--target-db', default=None, help='Target DB name (default: ORACLE_PG_DATABASE from .env)')
+@click.option('--source-host', default=None, help='Source host (default: AWS_RDS_HOST from .env)')
+@click.option('--target-host', default=None, help='Target host (default: ORACLE_PG_HOST from .env)')
 @click.option('--output', default=None, help='Save full report to a JSON file')
 @click.option('--mock', is_flag=True, help='Run with mock data, no credentials needed')
 @click.option('--env', is_flag=True, help='Load credentials from .env file')
-def analyze_schema(source_db, target_db, output, mock, env):
-    """Analyze schema compatibility between AWS RDS PostgreSQL and Oracle Managed PostgreSQL."""
+def analyze_schema(source_db, target_db, source_host, target_host, output, mock, env):
+    """Run pre-flight migration checklist between source and target databases."""
     try:
         from meridian.analyzers import schema_diff
         from datetime import datetime
 
+        src_cfg = get_aws_config(env, host=source_host, database=source_db)
+        tgt_cfg = get_oracle_config(env, host=target_host, database=target_db)
+
+        source_db = source_db or src_cfg['database']
+        target_db = target_db or tgt_cfg['database']
+
         source_config = None
         target_config = None
 
-        if env and not mock:
-            from dotenv import load_dotenv
-            load_dotenv()
-            source_config = {
-                "host": os.getenv('AWS_RDS_HOST'),
-                "port": int(os.getenv('AWS_RDS_PORT', 5432)),
-                "database": os.getenv('AWS_RDS_DATABASE'),
-                "user": os.getenv('AWS_RDS_USER'),
-                "password": os.getenv('AWS_RDS_PASSWORD'),
-                "sslmode": "prefer"
-            }
-            target_config = {
-                "host": os.getenv('ORACLE_PG_HOST'),
-                "port": int(os.getenv('ORACLE_PG_PORT', 5432)),
-                "database": os.getenv('ORACLE_PG_DATABASE'),
-                "user": os.getenv('ORACLE_PG_USER'),
-                "password": os.getenv('ORACLE_PG_PASSWORD'),
-                "sslmode": "require"
-            }
+        if not mock:
+            if not all([src_cfg['host'], src_cfg['database'], src_cfg['user'], src_cfg['password']]):
+                console.print("[red]Missing source credentials — use --env or pass source options[/red]")
+                raise click.Abort()
+            if not all([tgt_cfg['host'], tgt_cfg['database'], tgt_cfg['user'], tgt_cfg['password']]):
+                console.print("[red]Missing target credentials — use --env or pass target options[/red]")
+                raise click.Abort()
+            source_config = src_cfg
+            target_config = tgt_cfg
 
         result = schema_diff.analyze(
             mock=mock,
@@ -197,16 +316,24 @@ def analyze_schema(source_db, target_db, output, mock, env):
         console.print(f"[red]Error: {e}[/red]")
         raise click.Abort()
 
+
 @cli.command()
-@click.option('--source-db', required=True, help='Source database name on AWS RDS')
-@click.option('--target-db', required=True, help='Target database name on Oracle Managed PostgreSQL')
+@click.option('--source-db', default=None, help='Source DB name (default: AWS_RDS_DATABASE from .env)')
+@click.option('--target-db', default=None, help='Target DB name (default: ORACLE_PG_DATABASE from .env)')
 @click.option('--output', default=None, help='Save replication report to a JSON file')
 @click.option('--mock', is_flag=True, help='Simulate replication with mock data')
-def replicate(source_db, target_db, output, mock):
-    """Replicate data from AWS RDS PostgreSQL to Oracle Managed PostgreSQL."""
+@click.option('--env', is_flag=True, help='Load credentials from .env file')
+def replicate(source_db, target_db, output, mock, env):
+    """Replicate data from source to target using pglogical CDC."""
     try:
         from meridian.replicator import replicator
         from datetime import datetime
+
+        src_cfg = get_aws_config(env)
+        tgt_cfg = get_oracle_config(env)
+
+        source_db = source_db or src_cfg['database']
+        target_db = target_db or tgt_cfg['database']
 
         result = replicator.replicate(
             source_db=source_db,
@@ -227,17 +354,26 @@ def replicate(source_db, target_db, output, mock):
 
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
-        raise click.Abort()  
+        raise click.Abort()
+
+
 @cli.command()
-@click.option('--source-db', required=True, help='Source database name on AWS RDS')
-@click.option('--target-db', required=True, help='Target database name on Oracle Managed PostgreSQL')
+@click.option('--source-db', default=None, help='Source DB name (default: AWS_RDS_DATABASE from .env)')
+@click.option('--target-db', default=None, help='Target DB name (default: ORACLE_PG_DATABASE from .env)')
 @click.option('--output', default=None, help='Save validation report to a JSON file')
 @click.option('--mock', is_flag=True, help='Simulate validation with mock data')
-def validate(source_db, target_db, output, mock):
+@click.option('--env', is_flag=True, help='Load credentials from .env file')
+def validate(source_db, target_db, output, mock, env):
     """Validate data parity between source and target databases."""
     try:
         from meridian.validator import validator
         from datetime import datetime
+
+        src_cfg = get_aws_config(env)
+        tgt_cfg = get_oracle_config(env)
+
+        source_db = source_db or src_cfg['database']
+        target_db = target_db or tgt_cfg['database']
 
         result = validator.validate(
             source_db=source_db,
@@ -260,16 +396,24 @@ def validate(source_db, target_db, output, mock):
         console.print(f"[red]Error: {e}[/red]")
         raise click.Abort()
 
+
 @cli.command()
-@click.option('--source-db', required=True, help='Source database name on AWS RDS')
-@click.option('--target-db', required=True, help='Target database name on Oracle Managed PostgreSQL')
+@click.option('--source-db', default=None, help='Source DB name (default: AWS_RDS_DATABASE from .env)')
+@click.option('--target-db', default=None, help='Target DB name (default: ORACLE_PG_DATABASE from .env)')
 @click.option('--output', default=None, help='Save cutover report to a JSON file')
 @click.option('--mock', is_flag=True, help='Simulate cutover with mock data')
-def cutover(source_db, target_db, output, mock):
-    """Execute cutover from AWS RDS PostgreSQL to Oracle Managed PostgreSQL."""
+@click.option('--env', is_flag=True, help='Load credentials from .env file')
+def cutover(source_db, target_db, output, mock, env):
+    """Execute cutover from source to target database."""
     try:
         from meridian.cutover import cutover as cutover_module
         from datetime import datetime
+
+        src_cfg = get_aws_config(env)
+        tgt_cfg = get_oracle_config(env)
+
+        source_db = source_db or src_cfg['database']
+        target_db = target_db or tgt_cfg['database']
 
         result = cutover_module.cutover(
             source_db=source_db,
@@ -291,104 +435,66 @@ def cutover(source_db, target_db, output, mock):
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
         raise click.Abort()
-    
+
+
 @cli.command()
-@click.option('--host', default=None, help='RDS endpoint')
-@click.option('--port', default=5432, help='Database port')
-@click.option('--database', default=None, help='Database name')
-@click.option('--user', default=None, help='Database user')
-@click.option('--password', default=None, help='Database password')
-@click.option('--output', default=None, help='Save output to a JSON file')
+@click.option('--output', default='meridian_schema.sql', help='Schema dump filename')
+@click.option('--source-host', default=None, help='Source host (default: AWS_RDS_HOST from .env)')
+@click.option('--target-host', default=None, help='Target host (default: ORACLE_PG_HOST from .env)')
 @click.option('--env', is_flag=True, help='Load credentials from .env file')
-def scan_rds(host, port, database, user, password, output, env):
-    """Scan a real AWS RDS PostgreSQL database — tables, extensions, indexes, parameters."""
+def fix_schema(output, source_host, target_host, env):
+    """Dump schema from source and restore to target — fixes missing tables blocker."""
+    import subprocess
+
     try:
-        from meridian.scanners import aws as aws_scanner
+        src_cfg = get_aws_config(env, host=source_host)
+        tgt_cfg = get_oracle_config(env, host=target_host)
 
-        if env:
-            from dotenv import load_dotenv
-            load_dotenv()
-            host = host or os.getenv('AWS_RDS_HOST')
-            port = port or int(os.getenv('AWS_RDS_PORT', 5432))
-            database = database or os.getenv('AWS_RDS_DATABASE')
-            user = user or os.getenv('AWS_RDS_USER')
-            password = password or os.getenv('AWS_RDS_PASSWORD')
+        console.print(f"\n[bold magenta]Meridian — Schema Fix[/bold magenta]")
+        console.print(f"\n[bold blue]Step 1: Dumping schema from source...[/bold blue]")
 
-        if not all([host, database, user, password]):
-            console.print("[red]Missing credentials — use --env to load from .env file[/red]")
+        env_vars = {**os.environ, 'PGPASSWORD': src_cfg['password']}
+        dump_cmd = [
+            'pg_dump',
+            '-h', src_cfg['host'],
+            '-p', str(src_cfg['port']),
+            '-U', src_cfg['user'],
+            '-d', src_cfg['database'],
+            '--schema-only',
+            '--no-owner',
+            '--no-privileges',
+            '-f', output
+        ]
+
+        result = subprocess.run(dump_cmd, env=env_vars, capture_output=True, text=True)
+        if result.returncode != 0:
+            console.print(f"[red]Schema dump failed: {result.stderr}[/red]")
             raise click.Abort()
+        console.print(f"[green]✅ Schema dumped to {output}[/green]")
 
-        result = aws_scanner.scan_rds_database(
-            host=host,
-            port=port,
-            database=database,
-            user=user,
-            password=password
-        )
+        console.print(f"\n[bold blue]Step 2: Restoring schema to target...[/bold blue]")
 
+        env_vars = {**os.environ, 'PGPASSWORD': tgt_cfg['password']}
+        restore_cmd = [
+            'psql',
+            f"host={tgt_cfg['host']} port={tgt_cfg['port']} dbname={tgt_cfg['database']} user={tgt_cfg['user']} sslmode=require",
+            '-f', output
+        ]
 
-        # Always print clean summary
-        aws_scanner.print_rds_summary(result)
+        result = subprocess.run(restore_cmd, env=env_vars, capture_output=True, text=True)
+        if result.returncode != 0:
+            console.print(f"[red]Schema restore failed: {result.stderr}[/red]")
+            raise click.Abort()
+        console.print(f"[green]✅ Schema restored to target[/green]")
 
-        # Always save full report
-        from datetime import datetime
-        timestamp = datetime.utcnow().strftime('%Y-%m-%d-%H-%M')
-        filename = output or f"meridian-rds-scan-{result['database']}-{timestamp}.json"
-        with open(filename, 'w') as f:
-            json.dump(result, f, indent=2, default=str)
-        console.print(f"\n  Full report saved to: [bold]{filename}[/bold]\n")
+        console.print(f"\n[bold blue]Step 3: Next steps...[/bold blue]")
+        console.print("[yellow]Run: meridian analyze-schema --env[/yellow]")
+        console.print("\n[bold green]🎉 Schema fix complete![/bold green]")
 
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
         raise click.Abort()
 
-@cli.command()
-@click.option('--host', default=None, help='Oracle PostgreSQL endpoint')
-@click.option('--port', default=5432, help='Database port')
-@click.option('--database', default=None, help='Database name')
-@click.option('--user', default=None, help='Database user')
-@click.option('--password', default=None, help='Database password')
-@click.option('--output', default=None, help='Save output to a JSON file')
-@click.option('--env', is_flag=True, help='Load credentials from .env file')
-def scan_oracle_db(host, port, database, user, password, output, env):
-    """Scan a real Oracle Managed PostgreSQL database — tables, extensions, indexes, parameters."""
-    try:
-        from meridian.scanners import oracle as oracle_scanner
-
-        if env:
-            from dotenv import load_dotenv
-            load_dotenv()
-            host = host or os.getenv('ORACLE_PG_HOST')
-            port = port or int(os.getenv('ORACLE_PG_PORT', 5432))
-            database = database or os.getenv('ORACLE_PG_DATABASE')
-            user = user or os.getenv('ORACLE_PG_USER')
-            password = password or os.getenv('ORACLE_PG_PASSWORD')
-
-        if not all([host, database, user, password]):
-            console.print("[red]Missing credentials — use --env to load from .env file[/red]")
-            raise click.Abort()
-
-        result = oracle_scanner.scan_oracle_database(
-            host=host,
-            port=port,
-            database=database,
-            user=user,
-            password=password
-        )
-
-        oracle_scanner.print_oracle_db_summary(result)
-
-        from datetime import datetime
-        timestamp = datetime.utcnow().strftime('%Y-%m-%d-%H-%M')
-        filename = output or f"meridian-oracle-scan-{result['database']}-{timestamp}.json"
-        with open(filename, 'w') as f:
-            json.dump(result, f, indent=2, default=str)
-        console.print(f"\n  Full report saved to: [bold]{filename}[/bold]\n")
-
-    except Exception as e:
-        console.print(f"[red]Error: {e}[/red]")
-        raise click.Abort()  
-    
 
 if __name__ == '__main__':
     cli()
