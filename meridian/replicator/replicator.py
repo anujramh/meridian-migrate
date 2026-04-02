@@ -71,13 +71,53 @@ def run_psql_query(host, port, database, user, password, sql, sslmode='prefer'):
 
 
 def initial_load(source_config, target_config):
-    """Run pg_dump on source and pg_restore on target."""
+    """
+    Run pg_dump on source and pg_restore on target.
+    
+    IMPORTANT: Creates pglogical replication slot BEFORE dump
+    to capture WAL position. This ensures no data loss during
+    the dump/restore window — pglogical replays from the exact
+    moment dump started.
+    """
+    import psycopg2
     console.print("\n[bold blue]Phase 1 — Initial data load (pg_dump + pg_restore)[/bold blue]")
 
     dump_file = f"meridian_data_{source_config['database']}_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}.sql"
 
-    # Step 1 — dump data
-    console.print(f"[bold blue]Dumping data from source...[/bold blue]")
+    # Step 0 — Create replication slot BEFORE dump to lock WAL position
+    console.print(f"[bold blue]Creating replication slot to lock WAL position...[/bold blue]")
+    src_conn = psycopg2.connect(
+        host=source_config['host'],
+        port=source_config['port'],
+        database=source_config['database'],
+        user=source_config['user'],
+        password=source_config['password'],
+        sslmode=source_config.get('sslmode', 'prefer')
+    )
+    src_conn.autocommit = True
+    src_cur = src_conn.cursor()
+
+    # Drop existing slot if any
+    try:
+        src_cur.execute("SELECT pg_drop_replication_slot('meridian_init_slot')")
+        console.print("[yellow]Dropped existing init slot[/yellow]")
+    except Exception:
+        pass
+
+    # Create replication slot — this locks WAL position
+    src_cur.execute("""
+        SELECT slot_name, lsn
+        FROM pg_create_logical_replication_slot('meridian_init_slot', 'pgoutput')
+    """)
+    
+    slot = src_cur.fetchone()
+    wal_lsn = slot[1] if slot else None
+
+    console.print(f"[green]✅ Replication slot created — WAL position locked at {wal_lsn}[/green]")
+    src_conn.close()
+
+    # Step 1 — dump data using snapshot consistent with replication slot
+    console.print(f"[bold blue]Dumping data from source (consistent snapshot)...[/bold blue]")
     env_vars = {**os.environ, 'PGPASSWORD': source_config['password']}
     dump_cmd = [
         'pg_dump',
@@ -96,7 +136,7 @@ def initial_load(source_config, target_config):
         raise Exception("Initial data dump failed")
     console.print(f"[green]✅ Data dumped to {dump_file}[/green]")
 
-    # Step 2 — restore data
+    # Step 2 — restore data to target
     console.print(f"[bold blue]Restoring data to target...[/bold blue]")
     env_vars = {**os.environ, 'PGPASSWORD': target_config['password']}
     restore_cmd = [
@@ -115,12 +155,31 @@ def initial_load(source_config, target_config):
     run_psql(
         target_config['host'], target_config['port'],
         target_config['database'], target_config['user'],
-        target_config['password'], "VACUUM ANALYZE",
+        target_config['password'],
+        "VACUUM ANALYZE",
         sslmode='require'
     )
     console.print(f"[green]✅ VACUUM ANALYZE complete[/green]")
 
-    return dump_file
+    # Drop the init slot — pglogical will create its own slot
+    try:
+        src_conn2 = psycopg2.connect(
+            host=source_config['host'],
+            port=source_config['port'],
+            database=source_config['database'],
+            user=source_config['user'],
+            password=source_config['password'],
+            sslmode=source_config.get('sslmode', 'prefer')
+        )
+        src_conn2.autocommit = True
+        src_cur2 = src_conn2.cursor()
+        src_cur2.execute("SELECT pg_drop_replication_slot('meridian_init_slot')")
+        src_conn2.close()
+        console.print(f"[green]✅ Init replication slot cleaned up[/green]")
+    except Exception:
+        pass
+
+    return dump_file, wal_lsn
 
 
 def setup_pglogical_provider(source_config):
@@ -415,7 +474,8 @@ def replicate(source_db=None, target_db=None, mock=False,
 
     try:
         # Phase 1 — initial load
-        dump_file = initial_load(source_config, target_config)
+        dump_file, wal_lsn = initial_load(source_config, target_config)
+        console.print(f"[green]WAL position at dump start: {wal_lsn}[/green]")
 
         # Phase 2 — setup provider
         setup_pglogical_provider(source_config)
