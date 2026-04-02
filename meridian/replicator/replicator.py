@@ -109,7 +109,7 @@ def initial_load(source_config, target_config):
         SELECT slot_name, lsn
         FROM pg_create_logical_replication_slot('meridian_init_slot', 'pgoutput')
     """)
-    
+
     slot = src_cur.fetchone()
     wal_lsn = slot[1] if slot else None
 
@@ -458,9 +458,8 @@ def print_summary(result):
         console.print(f"  [yellow]Status: {result['status']}[/yellow]")
     console.print("─" * 50)
 
-
 def replicate(source_db=None, target_db=None, mock=False,
-              source_config=None, target_config=None):
+              source_config=None, target_config=None, background=False):
     console.print(f"\n[bold magenta]Meridian — Replication Engine[/bold magenta]")
     console.print(f"  Source: [yellow]{source_db}[/yellow]")
     console.print(f"  Target: [yellow]{target_db}[/yellow]\n")
@@ -472,29 +471,221 @@ def replicate(source_db=None, target_db=None, mock=False,
         console.print("[red]Real mode requires source and target config — use --env[/red]")
         return None
 
+    from meridian.state.state_manager import (
+        create_state, load_state, is_running, get_resume_point,
+        phase_start, phase_complete, phase_fail, migration_complete,
+        save_state, STATE_FILE
+    )
+    import os
+
+    # Check for existing state
+    existing_state = load_state()
+    state = None
+
+    if existing_state:
+        if is_running(existing_state):
+            console.print("[bold red]⚠️  Migration already running![/bold red]")
+            console.print(f"[red]PID: {existing_state['process']['pid']}[/red]")
+            console.print("[yellow]Run: meridian state to check progress[/yellow]")
+            return None
+
+        if existing_state['status'] == 'complete':
+            console.print("[yellow]Previous migration was complete.[/yellow]")
+            console.print("[yellow]Starting fresh migration...[/yellow]")
+            os.remove(STATE_FILE)
+            existing_state = None
+
+        elif existing_state['status'] == 'failed':
+            resume_point = get_resume_point(existing_state)
+            console.print(f"[yellow]Found failed migration — resuming from: [bold]{resume_point}[/bold][/yellow]")
+            state = existing_state
+            state['status'] = 'running'
+            state['process']['pid'] = os.getpid()
+            save_state(state)
+
+    if not state:
+        state = create_state(source_config, target_config,
+                            mode='background' if background else 'foreground')
+
     try:
-        # Phase 1 — initial load
-        dump_file, wal_lsn = initial_load(source_config, target_config)
-        console.print(f"[green]WAL position at dump start: {wal_lsn}[/green]")
+        # Phase 1 — replication slot
+        if state['phases']['replication_slot']['status'] != 'complete':
+            phase_start(state, 'replication_slot')
+            try:
+                import psycopg2
+                src_conn = psycopg2.connect(
+                    host=source_config['host'],
+                    port=source_config['port'],
+                    database=source_config['database'],
+                    user=source_config['user'],
+                    password=source_config['password'],
+                    sslmode=source_config.get('sslmode', 'prefer')
+                )
+                src_conn.autocommit = True
+                src_cur = src_conn.cursor()
 
-        # Phase 2 — setup provider
-        setup_pglogical_provider(source_config)
+                try:
+                    src_cur.execute("SELECT pg_drop_replication_slot('meridian_init_slot')")
+                except Exception:
+                    pass
 
-        # Phase 3 — setup subscriber
-        setup_pglogical_subscriber(source_config, target_config)
+                src_cur.execute("""
+                    SELECT slot_name, lsn
+                    FROM pg_create_logical_replication_slot('meridian_init_slot', 'pgoutput')
+                """)
+                slot = src_cur.fetchone()
+                wal_lsn = str(slot[1]) if slot else None
+                src_conn.close()
 
-        # Phase 4 — monitor
-        monitor_replication(target_config, duration_seconds=30)
+                state['wal_lsn'] = wal_lsn
+                phase_complete(state, 'replication_slot', wal_lsn=wal_lsn)
+                console.print(f"[green]✅ Replication slot created — WAL position locked at {wal_lsn}[/green]")
+            except Exception as e:
+                phase_fail(state, 'replication_slot', e)
+                raise
+        else:
+            console.print(f"[dim]⏭  replication_slot — skipping (already complete)[/dim]")
+
+        # Phase 2 — dump
+        dump_file = state['phases']['dump'].get('file')
+        if state['phases']['dump']['status'] != 'complete':
+            phase_start(state, 'dump')
+            try:
+                dump_file = f"meridian_data_{source_config['database']}_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}.sql"
+                console.print(f"[bold blue]Dumping data from source...[/bold blue]")
+                env_vars = {**os.environ, 'PGPASSWORD': source_config['password']}
+                dump_cmd = [
+                    'pg_dump',
+                    '-h', source_config['host'],
+                    '-p', str(source_config['port']),
+                    '-U', source_config['user'],
+                    '-d', source_config['database'],
+                    '--data-only',
+                    '--no-owner',
+                    '--no-privileges',
+                    '-f', dump_file
+                ]
+                result = subprocess.run(dump_cmd, env=env_vars, capture_output=True, text=True)
+                if result.returncode != 0:
+                    raise Exception(f"pg_dump failed: {result.stderr}")
+
+                size_bytes = os.path.getsize(dump_file)
+                phase_complete(state, 'dump', file=dump_file, size_bytes=size_bytes)
+                console.print(f"[green]✅ Data dumped to {dump_file} ({size_bytes:,} bytes)[/green]")
+            except Exception as e:
+                phase_fail(state, 'dump', e)
+                raise
+        else:
+            console.print(f"[dim]⏭  dump — skipping (already complete — {dump_file})[/dim]")
+
+        # Phase 3 — restore
+        if state['phases']['restore']['status'] != 'complete':
+            phase_start(state, 'restore')
+            try:
+                console.print(f"[bold blue]Restoring data to target...[/bold blue]")
+                env_vars = {**os.environ, 'PGPASSWORD': target_config['password']}
+                restore_cmd = [
+                    'psql',
+                    f"host={target_config['host']} port={target_config['port']} dbname={target_config['database']} user={target_config['user']} sslmode=require",
+                    '-f', dump_file
+                ]
+                result = subprocess.run(restore_cmd, env=env_vars, capture_output=True, text=True)
+                if result.returncode != 0:
+                    raise Exception(f"pg_restore failed: {result.stderr}")
+
+                phase_complete(state, 'restore')
+                console.print(f"[green]✅ Data restored to target[/green]")
+            except Exception as e:
+                phase_fail(state, 'restore', e)
+                raise
+        else:
+            console.print(f"[dim]⏭  restore — skipping (already complete)[/dim]")
+
+        # Phase 4 — vacuum
+        if state['phases']['vacuum']['status'] != 'complete':
+            phase_start(state, 'vacuum')
+            try:
+                console.print(f"[bold blue]Running VACUUM ANALYZE on target...[/bold blue]")
+                run_psql(
+                    target_config['host'], target_config['port'],
+                    target_config['database'], target_config['user'],
+                    target_config['password'], "VACUUM ANALYZE",
+                    sslmode='require'
+                )
+                phase_complete(state, 'vacuum')
+                console.print(f"[green]✅ VACUUM ANALYZE complete[/green]")
+            except Exception as e:
+                phase_fail(state, 'vacuum', e)
+                raise
+        else:
+            console.print(f"[dim]⏭  vacuum — skipping (already complete)[/dim]")
+
+        # Cleanup init slot
+        try:
+            import psycopg2
+            src_conn2 = psycopg2.connect(
+                host=source_config['host'],
+                port=source_config['port'],
+                database=source_config['database'],
+                user=source_config['user'],
+                password=source_config['password'],
+                sslmode=source_config.get('sslmode', 'prefer')
+            )
+            src_conn2.autocommit = True
+            src_cur2 = src_conn2.cursor()
+            src_cur2.execute("SELECT pg_drop_replication_slot('meridian_init_slot')")
+            src_conn2.close()
+        except Exception:
+            pass
+
+        # Phase 5 — provider setup
+        if state['phases']['provider_setup']['status'] != 'complete':
+            phase_start(state, 'provider_setup')
+            try:
+                setup_pglogical_provider(source_config)
+                phase_complete(state, 'provider_setup')
+            except Exception as e:
+                phase_fail(state, 'provider_setup', e)
+                raise
+        else:
+            console.print(f"[dim]⏭  provider_setup — skipping (already complete)[/dim]")
+
+        # Phase 6 — subscriber setup
+        if state['phases']['subscriber_setup']['status'] != 'complete':
+            phase_start(state, 'subscriber_setup')
+            try:
+                setup_pglogical_subscriber(source_config, target_config)
+                phase_complete(state, 'subscriber_setup')
+            except Exception as e:
+                phase_fail(state, 'subscriber_setup', e)
+                raise
+        else:
+            console.print(f"[dim]⏭  subscriber_setup — skipping (already complete)[/dim]")
+
+        # Phase 7 — CDC active
+        if state['phases']['cdc_active']['status'] != 'complete':
+            phase_start(state, 'cdc_active')
+            try:
+                monitor_result = monitor_replication(target_config, duration_seconds=30)
+                if monitor_result.get('replicating'):
+                    phase_complete(state, 'cdc_active')
+                else:
+                    raise Exception(f"CDC not replicating — status: {monitor_result.get('status')}")
+            except Exception as e:
+                phase_fail(state, 'cdc_active', e)
+                raise
+        else:
+            console.print(f"[dim]⏭  cdc_active — skipping (already complete)[/dim]")
 
         # Get row counts
         tables_result = run_psql_query(
             source_config['host'], source_config['port'],
             source_config['database'], source_config['user'],
             source_config['password'],
-            """SELECT 
+            """SELECT
                 table_name,
-                (xpath('/row/cnt/text()', 
-                    query_to_xml('SELECT COUNT(*) AS cnt FROM ' || table_name, 
+                (xpath('/row/cnt/text()',
+                    query_to_xml('SELECT COUNT(*) AS cnt FROM ' || table_name,
                     false, true, '')))[1]::text::int AS row_count
                FROM information_schema.tables
                WHERE table_schema = 'public'
@@ -502,14 +693,18 @@ def replicate(source_db=None, target_db=None, mock=False,
         )
         total_rows = sum(r[1] for r in tables_result)
 
+        migration_complete(state)
+        console.print(f"\n[bold green]✅ Migration state: complete[/bold green]")
+
         return {
-            "replication_id": f"repl-{source_db}-to-{target_db}-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}",
+            "replication_id": state['migration_id'],
             "source_db": source_db,
             "target_db": target_db,
-            "started_at": datetime.utcnow().isoformat(),
+            "started_at": state['created_at'],
             "status": "live",
             "mode": "pg_dump initial load + pglogical CDC",
             "dump_file": dump_file,
+            "wal_lsn": state['wal_lsn'],
             "pglogical": {
                 "provider_node": "meridian_provider",
                 "subscriber_node": "meridian_subscriber",
@@ -528,9 +723,5 @@ def replicate(source_db=None, target_db=None, mock=False,
 
     except Exception as e:
         console.print(f"[red]Replication failed: {e}[/red]")
+        console.print(f"[yellow]Run: meridian replicate --env to resume[/yellow]")
         raise
-
-
-
-
-    

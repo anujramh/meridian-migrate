@@ -325,7 +325,8 @@ def analyze_schema(source_db, target_db, source_host, target_host, output, mock,
 @click.option('--output', default=None, help='Save replication report to a JSON file')
 @click.option('--mock', is_flag=True, help='Simulate replication with mock data')
 @click.option('--env', is_flag=True, help='Load credentials from .env file')
-def replicate(source_db, target_db, output, mock, env):
+@click.option('--bg', is_flag=True, help='Run in background mode')
+def replicate(source_db, target_db, output, mock, env, bg):
     """Replicate data from source to target using pglogical CDC."""
     try:
         from meridian.replicator import replicator
@@ -351,15 +352,37 @@ def replicate(source_db, target_db, output, mock, env):
             "database": tgt_cfg['database'],
             "user": tgt_cfg['user'],
             "password": tgt_cfg['password'],
-            "sslmode": tgt_cfg.get('sslmode', 'require')
+            "sslmode": tgt_cfg.get('sslmode', 'require'),
+            "fqdn": tgt_cfg.get('fqdn')
         }
+
+        if bg and not mock:
+            import subprocess
+            import sys
+            console.print(f"\n[bold magenta]Meridian — Background Mode[/bold magenta]")
+            console.print(f"  Starting migration in background...")
+            log_file = open('meridian.log', 'a')
+            cmd = [sys.executable, '-m', 'meridian.runner',
+                   '--env', '.env']
+            proc = subprocess.Popen(
+                cmd,
+                stdout=log_file,
+                stderr=log_file,
+                start_new_session=True
+            )
+            console.print(f"[green]✅ Migration started — PID: {proc.pid}[/green]")
+            console.print(f"[green]   Logs: meridian.log[/green]")
+            console.print(f"[yellow]   Check progress: meridian state[/yellow]")
+            console.print(f"[yellow]   Live monitor:   meridian monitor --env[/yellow]")
+            return
 
         result = replicator.replicate(
             source_db=source_db,
             target_db=target_db,
             mock=mock,
             source_config=None if mock else db_source_config,
-            target_config=None if mock else db_target_config
+            target_config=None if mock else db_target_config,
+            background=bg
         )
 
         if result is None:
@@ -921,5 +944,26 @@ def monitor(env, interval, alert_lag):
         console.print("\n\n[yellow]Monitor stopped[/yellow]")
         console.print("[dim]Run meridian status --env for a one-shot check[/dim]")
 
+@cli.command()
+def state():
+    """Show current migration state from state file."""
+    try:
+        from meridian.state.state_manager import load_state, print_state, is_running
+
+        state = load_state()
+        if not state:
+            console.print("[yellow]No migration state found[/yellow]")
+            console.print("[yellow]Run: meridian replicate --env to start a migration[/yellow]")
+            return
+
+        if is_running(state):
+            console.print("[bold green]Migration is currently running[/bold green]")
+
+        print_state(state)
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise click.Abort()
+    
 if __name__ == '__main__':
     cli()

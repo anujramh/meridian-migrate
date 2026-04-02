@@ -1,0 +1,186 @@
+{
+  "migration_id": "mig-meridiandb-to-postgres-20260402083239",
+  "meridian_version": "0.1.0",
+  "mode": "pg_dump_pglogical",
+  "created_at": "2026-04-02T08:32:41.887921",
+  "updated_at": "2026-04-02T08:39:25.932866",
+  "status": "complete",
+  "wal_lsn": "B/64000798",
+  "last_error": null,
+  "source": {
+    "host": "meridian-test-db.cmhs42ciso7b.us-east-1.rds.amazonaws.com",
+    "database": "meridiandb"
+  },
+  "target": {
+    "host": "migration.omglive.io",
+    "database": "postgres"
+  },
+  "process": {
+    "mode": "foreground",
+    "pid": 77848,
+    "started_at": "2026-04-02T08:32:41.888094",
+    "log_file": "meridian.log"
+  },
+  "restore_order": [
+    "users",
+    "orders",
+    "products"
+  ],
+  "tables": [
+    {
+      "name": "orders",
+      "source_rows": 5000,
+      "restored_rows": null,
+      "status": "pending",
+      "primary_key": "id",
+      "has_pk": true,
+      "foreign_keys": [
+        {
+          "column": "user_id",
+          "references_table": "users",
+          "references_column": "id",
+          "constraint_name": "orders_user_id_fkey"
+        }
+      ],
+      "indexes": [
+        "orders_pkey"
+      ],
+      "is_unlogged": false
+    },
+    {
+      "name": "products",
+      "source_rows": 500,
+      "restored_rows": null,
+      "status": "pending",
+      "primary_key": "id",
+      "has_pk": true,
+      "foreign_keys": [],
+      "indexes": [
+        "products_pkey"
+      ],
+      "is_unlogged": false
+    },
+    {
+      "name": "users",
+      "source_rows": 1001,
+      "restored_rows": null,
+      "status": "pending",
+      "primary_key": "id",
+      "has_pk": true,
+      "foreign_keys": [],
+      "indexes": [
+        "users_email_key",
+        "users_pkey"
+      ],
+      "is_unlogged": false
+    }
+  ],
+  "validation": {
+    "pre_migration": {
+      "orders": 5000,
+      "products": 500,
+      "users": 1001,
+      "total": 6501
+    },
+    "after_restore": null,
+    "after_cdc": null,
+    "pre_cutover": null,
+    "foreign_key_check": {
+      "status": "pending",
+      "violations": []
+    },
+    "index_check": {
+      "status": "pending",
+      "missing_on_target": []
+    }
+  },
+  "phases": {
+    "replication_slot": {
+      "status": "complete",
+      "started_at": "2026-04-02T08:32:41.892744",
+      "completed_at": "2026-04-02T08:32:43.628738",
+      "duration_seconds": 2,
+      "retry_count": 1,
+      "error": null,
+      "wal_lsn": "B/64000798"
+    },
+    "dump": {
+      "status": "complete",
+      "started_at": "2026-04-02T08:32:43.632573",
+      "completed_at": "2026-04-02T08:34:03.704945",
+      "duration_seconds": 80,
+      "retry_count": 1,
+      "error": null,
+      "file": "meridian_data_meridiandb_20260402083243.sql",
+      "size_bytes": 353166
+    },
+    "restore": {
+      "status": "complete",
+      "started_at": "2026-04-02T08:39:20.707194",
+      "completed_at": "2026-04-02T08:39:21.809656",
+      "duration_seconds": 1,
+      "retry_count": 2,
+      "error": null
+    },
+    "vacuum": {
+      "status": "complete",
+      "started_at": "2026-04-02T08:34:05.071164",
+      "completed_at": "2026-04-02T08:34:05.430256",
+      "duration_seconds": 0,
+      "retry_count": 1,
+      "error": null
+    },
+    "provider_setup": {
+      "status": "complete",
+      "started_at": "2026-04-02T08:34:07.020577",
+      "completed_at": "2026-04-02T08:34:24.670266",
+      "duration_seconds": 18,
+      "retry_count": 1,
+      "error": null
+    },
+    "subscriber_setup": {
+      "status": "complete",
+      "started_at": "2026-04-02T08:34:24.672678",
+      "completed_at": "2026-04-02T08:34:29.204394",
+      "duration_seconds": 5,
+      "retry_count": 1,
+      "error": null
+    },
+    "cdc_active": {
+      "status": "complete",
+      "started_at": "2026-04-02T08:34:29.205918",
+      "completed_at": "2026-04-02T08:35:01.054622",
+      "duration_seconds": 32,
+      "retry_count": 1,
+      "error": null
+    },
+    "validate": {
+      "status": "pending",
+      "started_at": null,
+      "completed_at": null,
+      "duration_seconds": null,
+      "retry_count": 0,
+      "error": null
+    },
+    "cutover": {
+      "status": "pending",
+      "started_at": null,
+      "completed_at": null,
+      "duration_seconds": null,
+      "retry_count": 0,
+      "error": null
+    },
+    "cleanup": {
+      "status": "pending",
+      "started_at": null,
+      "completed_at": null,
+      "duration_seconds": null,
+      "retry_count": 0,
+      "error": null
+    }
+  },
+  "resume": {
+    "can_resume": false,
+    "reason": "Migration complete"
+  }
+}
