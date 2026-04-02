@@ -650,6 +650,276 @@ def cleanup(env, output):
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
         raise click.Abort()
-    
+
+@cli.command()
+@click.option('--env', is_flag=True, help='Load credentials from .env file')
+def status(env):
+    """Show current replication status between source and target."""
+    try:
+        import psycopg2
+        from datetime import datetime
+
+        src_cfg = get_aws_config(env)
+        tgt_cfg = get_oracle_config(env)
+
+        console.print(f"\n[bold magenta]Meridian — Replication Status[/bold magenta]")
+        console.print(f"  Source: [yellow]{src_cfg['database']}[/yellow] (AWS RDS)")
+        console.print(f"  Target: [yellow]{tgt_cfg['database']}[/yellow] (Oracle Cloud)")
+        console.print(f"  Checked: [dim]{datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC[/dim]\n")
+
+        # Connect to target — subscription lives here
+        tgt_conn = psycopg2.connect(
+            host=tgt_cfg['host'],
+            port=tgt_cfg['port'],
+            database=tgt_cfg['database'],
+            user=tgt_cfg['user'],
+            password=tgt_cfg['password'],
+            sslmode=tgt_cfg.get('sslmode', 'require')
+        )
+        tgt_cur = tgt_conn.cursor()
+
+        # Subscription status
+        try:
+            tgt_cur.execute("""
+                SELECT
+                    subscription_name,
+                    status,
+                    provider_node
+                FROM pglogical.show_subscription_status()
+            """)
+            sub = tgt_cur.fetchone()
+        except Exception:
+            console.print("[yellow]⚠️  No pglogical node configured on target[/yellow]")
+            console.print("[yellow]Run: meridian replicate --env to start replication[/yellow]")
+            tgt_conn.close()
+            return
+
+        if not sub:
+            console.print("[red]❌ No active subscription found[/red]")
+            console.print("[yellow]Run: meridian replicate --env to start replication[/yellow]")
+            tgt_conn.close()
+            return
+
+        sub_name, sub_status, provider = sub
+
+        if sub_status == 'replicating':
+            console.print(f"  [green]✅ Status: {sub_status}[/green]")
+        elif sub_status == 'initializing':
+            console.print(f"  [yellow]⏳ Status: {sub_status}[/yellow]")
+        else:
+            console.print(f"  [red]❌ Status: {sub_status}[/red]")
+
+        console.print(f"  Subscription:  {sub_name}")
+        console.print(f"  Provider:      {provider}")
+
+        # Row counts on target
+        tgt_cur.execute("""
+            SELECT table_name FROM information_schema.tables
+            WHERE table_schema = 'public'
+            AND table_type = 'BASE TABLE'
+            ORDER BY table_name
+        """)
+        target_tables = [r[0] for r in tgt_cur.fetchall()]
+        tgt_conn.close()
+
+        # Row counts on source
+        src_conn = psycopg2.connect(
+            host=src_cfg['host'],
+            port=src_cfg['port'],
+            database=src_cfg['database'],
+            user=src_cfg['user'],
+            password=src_cfg['password'],
+            sslmode=src_cfg.get('sslmode', 'prefer')
+        )
+        src_cur = src_conn.cursor()
+
+        console.print()
+        console.print("  [bold]Table parity:[/bold]")
+
+        total_src = 0
+        total_tgt = 0
+
+        for table in target_tables:
+            # Source count
+            src_cur.execute(f"SELECT COUNT(*) FROM {table}")
+            src_count = src_cur.fetchone()[0]
+
+            # Target count
+            tgt_conn2 = psycopg2.connect(
+                host=tgt_cfg['host'],
+                port=tgt_cfg['port'],
+                database=tgt_cfg['database'],
+                user=tgt_cfg['user'],
+                password=tgt_cfg['password'],
+                sslmode=tgt_cfg.get('sslmode', 'require')
+            )
+            tgt_cur2 = tgt_conn2.cursor()
+            tgt_cur2.execute(f"SELECT COUNT(*) FROM {table}")
+            tgt_count = tgt_cur2.fetchone()[0]
+            tgt_conn2.close()
+
+            diff = src_count - tgt_count
+            total_src += src_count
+            total_tgt += tgt_count
+
+            if diff == 0:
+                console.print(f"  [green]✅ {table:<20} {src_count:>8,} rows — in sync[/green]")
+            else:
+                console.print(f"  [yellow]⚠️  {table:<20} source={src_count:,} target={tgt_count:,} lag={diff:,} rows[/yellow]")
+
+        src_conn.close()
+
+        console.print()
+        total_diff = total_src - total_tgt
+        if total_diff == 0:
+            console.print(f"  [bold green]✅ Total: {total_src:,} rows — perfectly in sync[/bold green]")
+        else:
+            console.print(f"  [bold yellow]⚠️  Total: source={total_src:,} target={total_tgt:,} lag={total_diff:,} rows[/bold yellow]")
+
+        console.print()
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise click.Abort()
+
+@cli.command()
+@click.option('--env', is_flag=True, help='Load credentials from .env file')
+@click.option('--interval', default=5, help='Refresh interval in seconds (default: 5)')
+@click.option('--alert-lag', default=100, help='Alert when row lag exceeds this threshold (default: 100)')
+def monitor(env, interval, alert_lag):
+    """Continuously monitor replication lag and parity — Ctrl+C to stop."""
+    import psycopg2
+    from datetime import datetime
+
+    src_cfg = get_aws_config(env)
+    tgt_cfg = get_oracle_config(env)
+
+    console.print(f"\n[bold magenta]Meridian — Live Replication Monitor[/bold magenta]")
+    console.print(f"  Source: [yellow]{src_cfg['database']}[/yellow] (AWS RDS)")
+    console.print(f"  Target: [yellow]{tgt_cfg['database']}[/yellow] (Oracle Cloud)")
+    console.print(f"  Refresh: every {interval}s · Alert lag threshold: {alert_lag} rows")
+    console.print(f"  Press [bold]Ctrl+C[/bold] to stop\n")
+    console.print("─" * 60)
+
+    iteration = 0
+
+    try:
+        while True:
+            iteration += 1
+            now = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+
+            try:
+                # Check subscription status
+                tgt_conn = psycopg2.connect(
+                    host=tgt_cfg['host'],
+                    port=tgt_cfg['port'],
+                    database=tgt_cfg['database'],
+                    user=tgt_cfg['user'],
+                    password=tgt_cfg['password'],
+                    sslmode=tgt_cfg.get('sslmode', 'require')
+                )
+                tgt_cur = tgt_conn.cursor()
+
+                try:
+                    tgt_cur.execute("""
+                        SELECT subscription_name, status, provider_node
+                        FROM pglogical.show_subscription_status()
+                    """)
+                    sub = tgt_cur.fetchone()
+                except Exception:
+                    sub = None
+
+                if not sub:
+                    console.print(f"[dim]{now}[/dim] [red]❌ No active subscription[/red]")
+                    tgt_conn.close()
+                    import time
+                    time.sleep(interval)
+                    continue
+
+                sub_name, sub_status, provider = sub
+
+                # Get table counts
+                tgt_cur.execute("""
+                    SELECT table_name FROM information_schema.tables
+                    WHERE table_schema = 'public'
+                    AND table_type = 'BASE TABLE'
+                    ORDER BY table_name
+                """)
+                tables = [r[0] for r in tgt_cur.fetchall()]
+
+                total_src = 0
+                total_tgt = 0
+                table_stats = []
+
+                src_conn = psycopg2.connect(
+                    host=src_cfg['host'],
+                    port=src_cfg['port'],
+                    database=src_cfg['database'],
+                    user=src_cfg['user'],
+                    password=src_cfg['password'],
+                    sslmode=src_cfg.get('sslmode', 'prefer')
+                )
+                src_cur = src_conn.cursor()
+
+                for table in tables:
+                    src_cur.execute(f"SELECT COUNT(*) FROM {table}")
+                    src_count = src_cur.fetchone()[0]
+
+                    tgt_cur.execute(f"SELECT COUNT(*) FROM {table}")
+                    tgt_count = tgt_cur.fetchone()[0]
+
+                    diff = src_count - tgt_count
+                    total_src += src_count
+                    total_tgt += tgt_count
+                    table_stats.append((table, src_count, tgt_count, diff))
+
+                src_conn.close()
+                tgt_conn.close()
+
+                total_lag = total_src - total_tgt
+
+                # Print status line
+                if sub_status == 'replicating' and total_lag == 0:
+                    status_icon = "✅"
+                    status_color = "green"
+                elif sub_status == 'replicating' and total_lag > 0:
+                    status_icon = "⏳"
+                    status_color = "yellow"
+                else:
+                    status_icon = "❌"
+                    status_color = "red"
+
+                console.print(
+                    f"[dim]{now}[/dim] "
+                    f"[{status_color}]{status_icon} {sub_status}[/{status_color}] "
+                    f"· source=[cyan]{total_src:,}[/cyan] "
+                    f"target=[cyan]{total_tgt:,}[/cyan] "
+                    f"lag=[{'red' if total_lag > 0 else 'green'}]{total_lag:,}[/{'red' if total_lag > 0 else 'green'}] rows"
+                )
+
+                # Alert if lag exceeds threshold
+                if total_lag > alert_lag:
+                    console.print(f"[bold red]⚠️  ALERT: Replication lag {total_lag:,} rows exceeds threshold {alert_lag:,}[/bold red]")
+
+                # Show per-table detail every 6 iterations (30 seconds)
+                if iteration % 6 == 0:
+                    console.print()
+                    for table, src, tgt, diff in table_stats:
+                        if diff == 0:
+                            console.print(f"  [green]✅ {table:<20} {src:>8,} rows in sync[/green]")
+                        else:
+                            console.print(f"  [yellow]⚠️  {table:<20} source={src:,} target={tgt:,} lag={diff:,}[/yellow]")
+                    console.print()
+
+            except Exception as e:
+                console.print(f"[dim]{now}[/dim] [red]Error: {e}[/red]")
+
+            import time
+            time.sleep(interval)
+
+    except KeyboardInterrupt:
+        console.print("\n\n[yellow]Monitor stopped[/yellow]")
+        console.print("[dim]Run meridian status --env for a one-shot check[/dim]")
+
 if __name__ == '__main__':
     cli()
