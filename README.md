@@ -177,14 +177,22 @@ Phase 4 — Monitoring replication status
 
 ---
 
-## Supported clouds
+## Supported migration paths
 
-| Cloud | Compute | PostgreSQL | MongoDB | Object Storage |
-|-------|---------|------------|---------|----------------|
-| AWS | ✅ | ✅ | ✅ | ✅ |
-| Oracle Cloud | ✅ | ✅ | 🔜 | ✅ |
-| GCP | 🔜 | 🔜 | 🔜 | 🔜 |
-| Azure | 🔜 | 🔜 | 🔜 | 🔜 |
+| Source | Target | Status |
+|--------|--------|--------|
+| AWS RDS PostgreSQL | Oracle Cloud PostgreSQL | ✅ Tested in production |
+| AWS RDS PostgreSQL | GCP Cloud SQL | 🔜 Coming soon |
+| AWS RDS PostgreSQL | Azure PostgreSQL | 🔜 Coming soon |
+
+## Cloud scanners (discovery only)
+
+| Cloud | Scanner | Network Mapper |
+|-------|---------|----------------|
+| AWS | ✅ | ✅ |
+| Oracle Cloud | ✅ | ✅ |
+| GCP | 🔜 | 🔜 |
+| Azure | 🔜 | 🔜 |
 
 ## Supported migration paths
 
