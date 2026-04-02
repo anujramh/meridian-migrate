@@ -1,11 +1,11 @@
 {
-  "migration_id": "mig-meridiandb-to-postgres-20260402083239",
+  "migration_id": "mig-meridiandb-to-postgres-20260402084820",
   "meridian_version": "0.1.0",
   "mode": "pg_dump_pglogical",
-  "created_at": "2026-04-02T08:32:41.887921",
-  "updated_at": "2026-04-02T08:39:25.932866",
+  "created_at": "2026-04-02T08:48:22.716977",
+  "updated_at": "2026-04-02T08:49:54.763040",
   "status": "complete",
-  "wal_lsn": "B/64000798",
+  "wal_lsn": "B/740010E0",
   "last_error": null,
   "source": {
     "host": "meridian-test-db.cmhs42ciso7b.us-east-1.rds.amazonaws.com",
@@ -16,9 +16,9 @@
     "database": "postgres"
   },
   "process": {
-    "mode": "foreground",
-    "pid": 77848,
-    "started_at": "2026-04-02T08:32:41.888094",
+    "mode": "background",
+    "pid": 516,
+    "started_at": "2026-04-02T08:48:22.717088",
     "log_file": "meridian.log"
   },
   "restore_order": [
@@ -97,59 +97,59 @@
   "phases": {
     "replication_slot": {
       "status": "complete",
-      "started_at": "2026-04-02T08:32:41.892744",
-      "completed_at": "2026-04-02T08:32:43.628738",
+      "started_at": "2026-04-02T08:48:22.721653",
+      "completed_at": "2026-04-02T08:48:24.537635",
       "duration_seconds": 2,
       "retry_count": 1,
       "error": null,
-      "wal_lsn": "B/64000798"
+      "wal_lsn": "B/740010E0"
     },
     "dump": {
       "status": "complete",
-      "started_at": "2026-04-02T08:32:43.632573",
-      "completed_at": "2026-04-02T08:34:03.704945",
-      "duration_seconds": 80,
+      "started_at": "2026-04-02T08:48:24.538461",
+      "completed_at": "2026-04-02T08:48:55.598218",
+      "duration_seconds": 31,
       "retry_count": 1,
       "error": null,
-      "file": "meridian_data_meridiandb_20260402083243.sql",
+      "file": "meridian_data_meridiandb_20260402084824.sql",
       "size_bytes": 353166
     },
     "restore": {
       "status": "complete",
-      "started_at": "2026-04-02T08:39:20.707194",
-      "completed_at": "2026-04-02T08:39:21.809656",
+      "started_at": "2026-04-02T08:48:55.602704",
+      "completed_at": "2026-04-02T08:48:56.731606",
       "duration_seconds": 1,
-      "retry_count": 2,
+      "retry_count": 1,
       "error": null
     },
     "vacuum": {
       "status": "complete",
-      "started_at": "2026-04-02T08:34:05.071164",
-      "completed_at": "2026-04-02T08:34:05.430256",
+      "started_at": "2026-04-02T08:48:56.734537",
+      "completed_at": "2026-04-02T08:48:57.079255",
       "duration_seconds": 0,
       "retry_count": 1,
       "error": null
     },
     "provider_setup": {
       "status": "complete",
-      "started_at": "2026-04-02T08:34:07.020577",
-      "completed_at": "2026-04-02T08:34:24.670266",
-      "duration_seconds": 18,
+      "started_at": "2026-04-02T08:48:58.473664",
+      "completed_at": "2026-04-02T08:49:17.043697",
+      "duration_seconds": 19,
       "retry_count": 1,
       "error": null
     },
     "subscriber_setup": {
       "status": "complete",
-      "started_at": "2026-04-02T08:34:24.672678",
-      "completed_at": "2026-04-02T08:34:29.204394",
-      "duration_seconds": 5,
+      "started_at": "2026-04-02T08:49:17.045141",
+      "completed_at": "2026-04-02T08:49:20.407747",
+      "duration_seconds": 3,
       "retry_count": 1,
       "error": null
     },
     "cdc_active": {
       "status": "complete",
-      "started_at": "2026-04-02T08:34:29.205918",
-      "completed_at": "2026-04-02T08:35:01.054622",
+      "started_at": "2026-04-02T08:49:20.408323",
+      "completed_at": "2026-04-02T08:49:52.222983",
       "duration_seconds": 32,
       "retry_count": 1,
       "error": null
