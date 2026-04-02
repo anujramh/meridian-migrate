@@ -182,8 +182,8 @@ Phase 4 — Monitoring replication status
 | Source | Target | Status |
 |--------|--------|--------|
 | AWS RDS PostgreSQL | Oracle Cloud PostgreSQL | ✅ Tested in production |
-| AWS RDS PostgreSQL | GCP Cloud SQL | 🔜 Coming soon |
-| AWS RDS PostgreSQL | Azure PostgreSQL | 🔜 Coming soon |
+| GCP Cloud SQL.     | Oracle Cloud PostgreSQL | 🔜 Coming soon |
+| Azure PostgreSQL   | Oracle Cloud PostgreSQL | 🔜 Coming soon |
 
 ## Cloud scanners (discovery only)
 
