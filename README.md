@@ -8,6 +8,29 @@ Built by engineers who have done it the hard way across AWS, GCP, Azure, and Ora
 
 ---
 
+## How it works
+
+Meridian uses a proven pattern for zero data loss migrations:
+```
+1. Lock WAL position on source (before anything starts)
+2. pg_dump — consistent snapshot from locked WAL position
+3. pg_restore — load snapshot to target
+4. VACUUM ANALYZE — optimize target after restore
+5. pglogical CDC — replay all changes from WAL position onwards
+6. Monitor — confirm replication is live and lag is zero
+7. Validate — row count + checksum parity check
+8. Cutover — orchestrated 10-step process
+9. Cleanup — remove replication objects
+```
+
+**Why WAL position locking matters:**
+
+For a 100GB database, pg_dump takes 2+ hours. During those 2 hours engineers keep writing to the source database. Without WAL locking — those changes are lost silently.
+
+Meridian locks the WAL position BEFORE dump starts. pglogical then replays ALL changes from that exact position — including everything that happened during the dump window. Zero data loss guaranteed.
+
+---
+
 ## The complete migration workflow
 ```bash
 # Step 1 — Pre-flight check
@@ -19,13 +42,19 @@ meridian fix-schema --env
 # Step 3 — Replicate data live
 meridian replicate --env
 
-# Step 4 — Validate parity
+# Step 4 — Check replication status
+meridian status --env
+
+# Step 5 — Monitor live replication lag
+meridian monitor --env
+
+# Step 6 — Validate parity
 meridian validate --env
 
-# Step 5 — Cutover
+# Step 7 — Cutover
 meridian cutover --env
 
-# Step 6 — Cleanup replication objects
+# Step 8 — Cleanup replication objects
 meridian cleanup --env
 ```
 
@@ -122,9 +151,11 @@ Meridian — Pre-flight Migration Checklist
 ### Replication
 ```
 Phase 1 — Initial data load (pg_dump + pg_restore)
+✅ Replication slot created — WAL position locked at B/30000060
 ✅ Data dumped to meridian_data_meridiandb.sql
 ✅ Data restored to target
 ✅ VACUUM ANALYZE complete
+✅ Init replication slot cleaned up
 
 Phase 2 — Setting up pglogical provider on source
 ✅ Provider node created
@@ -138,6 +169,34 @@ Phase 3 — Setting up pglogical subscriber on target
 Phase 4 — Monitoring replication status
 ✅ Subscription status: replicating — provider: meridian_provider
 ✅ CDC replication confirmed active
+```
+
+### Status check
+```
+Meridian — Replication Status
+  Source: meridiandb (AWS RDS)
+  Target: postgres (Oracle Cloud)
+
+  ✅ Status: replicating
+  Subscription:  meridian_subscription
+  Provider:      meridian_provider
+
+  Table parity:
+  ✅ orders    5,000 rows — in sync
+  ✅ products    500 rows — in sync
+  ✅ users     1,001 rows — in sync
+
+  ✅ Total: 6,501 rows — perfectly in sync
+```
+
+### Live monitor
+```
+Meridian — Live Replication Monitor
+  Refresh: every 5s · Alert lag threshold: 100 rows
+
+2026-04-02 07:34:21 ✅ replicating · source=6,501 target=6,501 lag=0 rows
+2026-04-02 07:34:29 ✅ replicating · source=6,501 target=6,501 lag=0 rows
+2026-04-02 07:34:37 ✅ replicating · source=6,501 target=6,501 lag=0 rows
 ```
 
 ### Parity validation
@@ -182,8 +241,8 @@ Phase 4 — Monitoring replication status
 | Source | Target | Status |
 |--------|--------|--------|
 | AWS RDS PostgreSQL | Oracle Cloud PostgreSQL | ✅ Tested in production |
-| GCP Cloud SQL.     | Oracle Cloud PostgreSQL | 🔜 Coming soon |
-| Azure PostgreSQL   | Oracle Cloud PostgreSQL | 🔜 Coming soon |
+| GCP Cloud SQL | Oracle Cloud PostgreSQL | 🔜 Coming soon |
+| Azure PostgreSQL | Oracle Cloud PostgreSQL | 🔜 Coming soon |
 
 ## Cloud scanners (discovery only)
 
@@ -193,14 +252,6 @@ Phase 4 — Monitoring replication status
 | Oracle Cloud | ✅ | ✅ |
 | GCP | 🔜 | 🔜 |
 | Azure | 🔜 | 🔜 |
-
-## Supported migration paths
-
-- AWS → Oracle Cloud ✅ (tested in production)
-- AWS → GCP 🔜
-- AWS → Azure 🔜
-- GCP → Oracle Cloud 🔜
-- Azure → AWS 🔜
 
 ---
 
@@ -231,16 +282,18 @@ Phase 4 — Monitoring replication status
 ```bash
 meridian analyze-schema --env        # Pre-flight checklist
 meridian fix-schema --env            # Dump + restore schema
+meridian replicate --env             # Start replication
+meridian status --env                # One-shot replication status
+meridian monitor --env               # Live replication dashboard
+meridian validate --env              # Validate parity
+meridian cutover --env               # Execute cutover
+meridian cleanup --env               # Remove replication objects
 meridian scan-rds --env              # Scan AWS RDS database
 meridian scan-oracle-db --env        # Scan Oracle PostgreSQL database
 meridian scan-aws --env              # Scan AWS resources
 meridian scan-oracle --env           # Scan Oracle Cloud resources
 meridian map-aws --env               # Map AWS network dependencies
 meridian map-oracle --env            # Map Oracle network dependencies
-meridian replicate --env             # Start replication
-meridian validate --env              # Validate parity
-meridian cutover --env               # Execute cutover
-meridian cleanup --env               # Remove replication objects
 ```
 
 All commands support `--mock` for testing without credentials.
@@ -256,16 +309,20 @@ All commands accept CLI arguments to override `.env` values.
 - [x] Network dependency mapper
 - [x] Pre-flight checklist — 15 checks
 - [x] Schema diff analyzer
+- [x] WAL position locking — zero data loss during dump window
 - [x] pg_dump initial load
 - [x] pglogical CDC replication
+- [x] Replication status command
+- [x] Live replication monitor with alerts
 - [x] Parity validator — row count + checksum
 - [x] Cutover orchestrator — 10 steps
 - [x] Post-cutover cleanup
+- [ ] Background mode — run dump in background
+- [ ] State file — resume interrupted migrations
 - [ ] GCP scanner
 - [ ] Azure scanner
 - [ ] Reverse replication for rollback
 - [ ] Web dashboard
-- [ ] Monitoring and alerting
 
 ---
 
